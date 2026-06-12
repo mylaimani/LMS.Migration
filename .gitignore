@@ -1,0 +1,19 @@
+# Visual Studio / .NET
+.vs/
+bin/
+obj/
+*.user
+*.suo
+
+# Local secrets & settings — never commit
+appsettings.local.json
+*.local.json
+.env
+
+# Logs and local data
+*.log
+migration_log*.txt
+
+# OS
+Thumbs.db
+.DS_Store
