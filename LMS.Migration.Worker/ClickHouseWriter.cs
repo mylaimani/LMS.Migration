@@ -19,6 +19,20 @@ namespace LMS.Migration.Worker
             _connectionString = connectionString;
         }
 
+        /// <summary>All fixture ids already in ball_events (for catch-up reconciliation).</summary>
+        public async Task<HashSet<uint>> GetAllFixtureIdsAsync()
+        {
+            var ids = new HashSet<uint>();
+            using var conn = new ClickHouseConnection(_connectionString);
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT DISTINCT fixture_id FROM lms.ball_events";
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                ids.Add(Convert.ToUInt32(reader.GetValue(0)));
+            return ids;
+        }
+
         /// <summary>
         /// Safe resume point with buffered inserts: the smallest of the
         /// per-table max fixture_ids (tables are flushed sequentially, so

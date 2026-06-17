@@ -91,14 +91,25 @@ Console.WriteLine("Loading fixture metadata...");
 var metaMap = await metaReader.LoadAllAsync();
 Console.WriteLine($"Loaded metadata for {metaMap.Count} fixtures.");
 
-// ── Resume support ──────────────────────────────────────────────
+// ── Catch-up mode flag:  .\LMS.Migration.Worker.exe catchup ────
+// Set-reconciliation: processes exactly the fixtures present in SQL Server
+// but absent from ClickHouse — guarantees no misses (even late-recorded
+// old fixtures) and no duplicates. Used during the cutover window while
+// new games are still being played.
+bool catchupMode = args.Length > 0 && args[0].Equals("catchup", StringComparison.OrdinalIgnoreCase);
+
+// ── Resume support (full-migration mode only) ───────────────────
 // If a previous run crashed, continue after the last fully-flushed fixture.
 // Anything above the safe point (possibly partial flushes) is deleted.
-uint startAfter = await writer.GetResumePointAsync();
-if (startAfter > 0)
+uint startAfter = 0;
+if (!catchupMode)
 {
-    Console.WriteLine($"Resuming: cleaning rows above fixture {startAfter} and continuing from there.");
-    await writer.DeleteFixturesAfterAsync(startAfter);
+    startAfter = await writer.GetResumePointAsync();
+    if (startAfter > 0)
+    {
+        Console.WriteLine($"Resuming: cleaning rows above fixture {startAfter} and continuing from there.");
+        await writer.DeleteFixturesAfterAsync(startAfter);
+    }
 }
 
 // ── Insert buffering ────────────────────────────────────────────
@@ -123,9 +134,8 @@ async Task FlushAsync()
 int total = 0;
 int failed = 0;
 
-Console.WriteLine("Starting LMS migration...");
-
-await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsync(startAfter))
+// Shared per-fixture pipeline (used by full migration AND catch-up mode)
+async Task ProcessFixtureAsync(uint fixtureId, string fixtureJson)
 {
     try
     {
@@ -135,7 +145,7 @@ await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsyn
         if (parsed.Balls.Count == 0)
         {
             Console.WriteLine($"[SKIP] {fixtureId} — no balls found");
-            continue;
+            return;
         }
 
         // 2. Context metadata from the preloaded dictionary
@@ -239,6 +249,42 @@ await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsyn
         failed++;
         Console.WriteLine($"[FAIL] {fixtureId} — {ex.Message}");
     }
+}
+
+// ── Catch-up mode ───────────────────────────────────────────────
+if (catchupMode)
+{
+    Console.WriteLine("Catch-up: comparing fixture ids between SQL Server and ClickHouse...");
+    var sqlIds = await fixtureReader.GetAllFixtureIdsAsync();
+    var chIds = await writer.GetAllFixtureIdsAsync();
+    var missing = sqlIds.Where(id => !chIds.Contains(id)).OrderBy(id => id).ToList();
+
+    Console.WriteLine($"SQL Server fixtures: {sqlIds.Count} | ClickHouse fixtures: {chIds.Count} | to migrate: {missing.Count}");
+
+    foreach (var id in missing)
+    {
+        var json = await fixtureReader.GetFixtureStateAsync(id);
+        if (string.IsNullOrEmpty(json))
+        {
+            Console.WriteLine($"[SKIP] {id} — empty state");
+            continue;
+        }
+        await ProcessFixtureAsync(id, json);
+    }
+
+    await FlushAsync();
+    Console.WriteLine($"\nCatch-up complete: {total} fixtures migrated, {failed} failed.");
+    if (total > 0)
+        Console.WriteLine("Reminder: run rebuild_mvs.sql and `clips` mode to refresh aggregates and new clips.");
+    return;
+}
+
+// ── Full migration ──────────────────────────────────────────────
+Console.WriteLine("Starting LMS migration...");
+
+await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsync(startAfter))
+{
+    await ProcessFixtureAsync(fixtureId, fixtureJson);
 }
 
 await FlushAsync();   // write any remaining buffered fixtures

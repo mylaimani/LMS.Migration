@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "LMS.PremiumProfile.Api": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:58831;http://localhost:58832"
+    }
+  }
+}

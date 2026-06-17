@@ -40,6 +40,36 @@ namespace LMS.Migration.Worker
             }
         }
 
+        /// <summary>All fixture ids present in FixtureState (for catch-up reconciliation).</summary>
+        public async Task<List<uint>> GetAllFixtureIdsAsync()
+        {
+            var ids = new List<uint>();
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+            using var cmd = new SqlCommand("SELECT DISTINCT fixtureid FROM FixtureState", conn);
+            cmd.CommandTimeout = 300;
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                if (uint.TryParse(reader[0]?.ToString(), out var id))
+                    ids.Add(id);
+            }
+            return ids;
+        }
+
+        /// <summary>One fixture's state JSON (for catch-up mode).</summary>
+        public async Task<string?> GetFixtureStateAsync(uint fixtureId)
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+            using var cmd = new SqlCommand(
+                "SELECT TOP 1 state FROM FixtureState WHERE fixtureid = @id", conn);
+            cmd.Parameters.AddWithValue("@id", (long)fixtureId);
+            cmd.CommandTimeout = 300;
+            var result = await cmd.ExecuteScalarAsync();
+            return result == null || result == DBNull.Value ? null : (string)result;
+        }
+
         private async Task<List<(uint FixtureId, string? Json)>> ReadBatchWithRetryAsync(uint after)
         {
             for (int attempt = 1; ; attempt++)
