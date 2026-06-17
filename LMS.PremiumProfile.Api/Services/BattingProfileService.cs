@@ -55,12 +55,12 @@ public class BattingProfileService : IBattingProfileService
         var where = BuildPhaseWhere(playerId, seasonId, leagueId);
         var sql = $@"
             SELECT over_phase,
-                   sumMerge(runs)        AS runs,
-                   sumMerge(legal_balls) AS legal_balls,
-                   sumMerge(dismissals)  AS dismissals,
-                   sumMerge(boundaries)  AS boundaries,
-                   sumMerge(sixes)       AS sixes,
-                   sumMerge(dots)        AS dots
+                   sum(runs)        AS runs,
+                   sum(legal_balls) AS legal_balls,
+                   sum(dismissals)  AS dismissals,
+                   sum(boundaries)  AS boundaries,
+                   sum(sixes)       AS sixes,
+                   sum(dots)        AS dots
             FROM lms.player_batting_phase
             {where}
             GROUP BY over_phase
