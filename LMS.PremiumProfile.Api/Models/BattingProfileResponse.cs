@@ -3,9 +3,12 @@ namespace LMS.PremiumProfile.Api.Models;
 // ── Top-level response ──────────────────────────────────────────────────────
 public class BattingProfileResponse
 {
-    public uint   PlayerId  { get; set; }
-    public uint?  SeasonId  { get; set; }
-    public uint?  LeagueId  { get; set; }
+    public uint      PlayerId  { get; set; }
+    public uint?     SeasonId  { get; set; }
+    public uint?     LeagueId  { get; set; }
+    public int?      Year      { get; set; }
+    public DateOnly? FromDate  { get; set; }
+    public DateOnly? ToDate    { get; set; }
 
     /// <summary>Powerplay / Middle / Death batting stats.</summary>
     public List<PhaseStatRow>   PhaseStats       { get; set; } = [];

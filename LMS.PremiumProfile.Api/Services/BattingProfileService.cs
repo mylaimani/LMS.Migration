@@ -7,9 +7,11 @@ namespace LMS.PremiumProfile.Api.Services;
 /// Fetches all batting profile data from ClickHouse.
 ///
 /// Table/MV reference:
-///   lms.player_batting_phase  — MV: batting stats by phase (fast, no season/league for H2H)
-///   lms.h2h_stats             — MV: career H2H batter vs bowler (no date/league filter)
-///   lms.ball_events           — raw; used when season/league filter is applied for H2H
+///   lms.player_batting_phase  — MV: batting stats by phase
+///                               (no game_date column — falls back to ball_events when date filter applied)
+///   lms.h2h_stats             — MV: career H2H batter vs bowler
+///                               (no date/league columns — falls back to ball_events when any filter applied)
+///   lms.ball_events           — raw; used for scoring pattern and filtered queries
 ///   lms.partnerships          — one row per partnership
 /// </summary>
 public class BattingProfileService : IBattingProfileService
@@ -23,22 +25,27 @@ public class BattingProfileService : IBattingProfileService
 
     // ── Public entry point ────────────────────────────────────────────────────
     public async Task<BattingProfileResponse> GetBattingProfileAsync(
-        uint playerId, uint? seasonId, uint? leagueId, CancellationToken ct = default)
+        uint playerId, uint? seasonId, uint? leagueId,
+        int? year, DateOnly? fromDate, DateOnly? toDate,
+        CancellationToken ct = default)
     {
         using var conn = new ClickHouseConnection(_connectionString);
         await conn.OpenAsync(ct);
 
         // Sequential — ClickHouseConnection is not thread-safe for concurrent queries
-        var phaseStats     = await GetPhaseStatsAsync(conn, playerId, seasonId, leagueId, ct);
-        var scoringPattern = await GetScoringPatternAsync(conn, playerId, seasonId, leagueId, ct);
-        var (fav, nem)     = await GetH2HBowlersAsync(conn, playerId, seasonId, leagueId, ct);
-        var partnerships   = await GetPartnershipsAsync(conn, playerId, seasonId, leagueId, ct);
+        var phaseStats     = await GetPhaseStatsAsync(conn, playerId, seasonId, leagueId, year, fromDate, toDate, ct);
+        var scoringPattern = await GetScoringPatternAsync(conn, playerId, seasonId, leagueId, year, fromDate, toDate, ct);
+        var (fav, nem)     = await GetH2HBowlersAsync(conn, playerId, seasonId, leagueId, year, fromDate, toDate, ct);
+        var partnerships   = await GetPartnershipsAsync(conn, playerId, seasonId, leagueId, year, fromDate, toDate, ct);
 
         return new BattingProfileResponse
         {
             PlayerId         = playerId,
             SeasonId         = seasonId,
             LeagueId         = leagueId,
+            Year             = year,
+            FromDate         = fromDate,
+            ToDate           = toDate,
             PhaseStats       = phaseStats,
             ScoringPattern   = scoringPattern,
             FavouriteBowlers = fav,
@@ -48,23 +55,51 @@ public class BattingProfileService : IBattingProfileService
     }
 
     // ── 1. Phase stats ────────────────────────────────────────────────────────
-    // Uses lms.player_batting_phase (SummingMergeTree MV) — millisecond response.
+    // Uses lms.player_batting_phase MV when no date filter (fast).
+    // Falls back to ball_events when year/date filter is applied (MV has no game_date).
     private static async Task<List<PhaseStatRow>> GetPhaseStatsAsync(
-        ClickHouseConnection conn, uint playerId, uint? seasonId, uint? leagueId, CancellationToken ct)
+        ClickHouseConnection conn, uint playerId,
+        uint? seasonId, uint? leagueId, int? year, DateOnly? fromDate, DateOnly? toDate,
+        CancellationToken ct)
     {
-        var where = BuildPhaseWhere(playerId, seasonId, leagueId);
-        var sql = $@"
-            SELECT over_phase,
-                   sum(runs)        AS runs,
-                   sum(legal_balls) AS legal_balls,
-                   sum(dismissals)  AS dismissals,
-                   sum(boundaries)  AS boundaries,
-                   sum(sixes)       AS sixes,
-                   sum(dots)        AS dots
-            FROM lms.player_batting_phase
-            {where}
-            GROUP BY over_phase
-            ORDER BY multiIf(over_phase='Powerplay',1, over_phase='Middle',2, 3)";
+        string sql;
+
+        bool hasDateFilter = year.HasValue || fromDate.HasValue || toDate.HasValue;
+
+        if (!hasDateFilter)
+        {
+            // Fast path — pre-aggregated MV
+            var where = BuildPhaseWhere(playerId, seasonId, leagueId);
+            sql = $@"
+                SELECT over_phase,
+                       sum(runs)        AS runs,
+                       sum(legal_balls) AS legal_balls,
+                       sum(dismissals)  AS dismissals,
+                       sum(boundaries)  AS boundaries,
+                       sum(sixes)       AS sixes,
+                       sum(dots)        AS dots
+                FROM lms.player_batting_phase
+                {where}
+                GROUP BY over_phase
+                ORDER BY multiIf(over_phase='Powerplay',1, over_phase='Middle',2, 3)";
+        }
+        else
+        {
+            // Date-filtered path — ball_events
+            var where = BuildBallEventsWhere(playerId, seasonId, leagueId, year, fromDate, toDate);
+            sql = $@"
+                SELECT over_phase,
+                       sum(toUInt64(runs_off_bat))  AS runs,
+                       sum(toUInt64(is_legal_ball)) AS legal_balls,
+                       sum(toUInt64(is_wicket))     AS dismissals,
+                       sum(toUInt64(is_boundary))   AS boundaries,
+                       sum(toUInt64(is_six))        AS sixes,
+                       sum(toUInt64(is_dot_ball))   AS dots
+                FROM lms.ball_events
+                {where}
+                GROUP BY over_phase
+                ORDER BY multiIf(over_phase='Powerplay',1, over_phase='Middle',2, 3)";
+        }
 
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
@@ -88,21 +123,25 @@ public class BattingProfileService : IBattingProfileService
     }
 
     // ── 2. Scoring pattern ────────────────────────────────────────────────────
-    // Queries ball_events directly (run distribution + over trend).
     private static async Task<ScoringPattern> GetScoringPatternAsync(
-        ClickHouseConnection conn, uint playerId, uint? seasonId, uint? leagueId, CancellationToken ct)
+        ClickHouseConnection conn, uint playerId,
+        uint? seasonId, uint? leagueId, int? year, DateOnly? fromDate, DateOnly? toDate,
+        CancellationToken ct)
     {
-        var where = BuildBallEventsWhere(playerId, seasonId, leagueId);
+        var where = BuildBallEventsWhere(playerId, seasonId, leagueId, year, fromDate, toDate);
 
-        // 2a. Run distribution (single-pass aggregation)
+        // 2a. Run distribution
+        // All counts restricted to is_legal_ball = 1 so they align with totalBalls.
+        // No-balls / penalty deliveries where runs_off_bat > 0 are intentionally excluded
+        // from the breakdown (they were causing a ~22 ball discrepancy vs totalBalls).
         var distSql = $@"
             SELECT
                 countIf(runs_off_bat = 0 AND is_legal_ball = 1) AS dots,
-                countIf(runs_off_bat = 1)                        AS ones,
-                countIf(runs_off_bat = 2)                        AS twos,
-                countIf(runs_off_bat = 3)                        AS threes,
-                countIf(runs_off_bat = 4)                        AS fours,
-                countIf(runs_off_bat = 6)                        AS sixes,
+                countIf(runs_off_bat = 1 AND is_legal_ball = 1) AS ones,
+                countIf(runs_off_bat = 2 AND is_legal_ball = 1) AS twos,
+                countIf(runs_off_bat = 3 AND is_legal_ball = 1) AS threes,
+                countIf(runs_off_bat = 4 AND is_legal_ball = 1) AS fours,
+                countIf(runs_off_bat = 6 AND is_legal_ball = 1) AS sixes,
                 sum(toUInt64(home_runs))                         AS home_runs,
                 sum(toUInt64(steal))                             AS steals,
                 sum(toUInt64(runs_off_bat))                      AS total_runs,
@@ -130,13 +169,18 @@ public class BattingProfileService : IBattingProfileService
             }
         }
 
-        // 2b. Over trend
+        // 2b. Over trend — cap at over_number <= 19 (0-indexed, = overs 1–20).
+        // over_number 20+ are penalty/post-innings deliveries that don't belong
+        // in the per-over chart (they were creating a spurious "over 21" bucket).
+        var trendWhereWithOverCap = where.Contains("WHERE")
+            ? where + " AND over_number <= 19"
+            : "WHERE over_number <= 19";
         var trendSql = $@"
             SELECT over_number,
                    sum(toUInt64(runs_off_bat))  AS runs,
                    sum(toUInt64(is_legal_ball)) AS legal_balls
             FROM lms.ball_events
-            {where}
+            {trendWhereWithOverCap}
             GROUP BY over_number
             ORDER BY over_number";
 
@@ -160,18 +204,22 @@ public class BattingProfileService : IBattingProfileService
     }
 
     // ── 3. H2H bowlers (favourite + nemesis) ─────────────────────────────────
-    // Career (no filter): use fast lms.h2h_stats MV.
-    // Filtered: query ball_events (lms.h2h_stats has no season/league columns).
+    // Career only (no filters): use fast lms.h2h_stats MV.
+    // Any filter applied: query ball_events directly.
     private static async Task<(List<H2HBowlerRow> Favourite, List<H2HBowlerRow> Nemesis)>
         GetH2HBowlersAsync(
-            ClickHouseConnection conn, uint playerId, uint? seasonId, uint? leagueId, CancellationToken ct)
+            ClickHouseConnection conn, uint playerId,
+            uint? seasonId, uint? leagueId, int? year, DateOnly? fromDate, DateOnly? toDate,
+            CancellationToken ct)
     {
         const int MinBalls = 10;
         List<H2HBowlerRow> rows;
 
-        if (seasonId == null && leagueId == null)
+        bool anyFilter = seasonId.HasValue || leagueId.HasValue || year.HasValue || fromDate.HasValue || toDate.HasValue;
+
+        if (!anyFilter)
         {
-            // Fast path — pre-aggregated MV
+            // Fast path — pre-aggregated MV (career stats)
             var sql = $@"
                 SELECT bowler_id,
                        sum(legal_balls) AS balls,
@@ -190,15 +238,15 @@ public class BattingProfileService : IBattingProfileService
         else
         {
             // Filtered path — ball_events
-            var where = BuildBallEventsWhere(playerId, seasonId, leagueId);
+            var where = BuildBallEventsWhere(playerId, seasonId, leagueId, year, fromDate, toDate);
             var sql = $@"
                 SELECT bowler_id,
-                       sum(toUInt64(is_legal_ball))              AS balls,
-                       sum(toUInt64(runs_off_bat))               AS runs,
-                       sum(toUInt64(is_wicket))                  AS wickets,
-                       sum(toUInt64(is_six))                     AS sixes,
-                       sum(toUInt64(is_boundary))                AS boundaries,
-                       sum(toUInt64(is_dot_ball))                AS dots
+                       sum(toUInt64(is_legal_ball)) AS balls,
+                       sum(toUInt64(runs_off_bat))  AS runs,
+                       sum(toUInt64(is_wicket))     AS wickets,
+                       sum(toUInt64(is_six))        AS sixes,
+                       sum(toUInt64(is_boundary))   AS boundaries,
+                       sum(toUInt64(is_dot_ball))   AS dots
                 FROM lms.ball_events
                 {where}
                 GROUP BY bowler_id
@@ -207,14 +255,8 @@ public class BattingProfileService : IBattingProfileService
             rows = await ReadH2HRows(conn, sql, ct);
         }
 
-        // Favourite = highest strike rate (min balls already filtered)
         var favourite = rows.OrderByDescending(r => r.StrikeRate).Take(10).ToList();
-
-        // Nemesis = most wickets, then lowest strike rate as tiebreak
-        var nemesis = rows.OrderByDescending(r => r.Wickets)
-                          .ThenBy(r => r.StrikeRate)
-                          .Take(10)
-                          .ToList();
+        var nemesis   = rows.OrderByDescending(r => r.Wickets).ThenBy(r => r.StrikeRate).Take(10).ToList();
 
         return (favourite, nemesis);
     }
@@ -244,17 +286,19 @@ public class BattingProfileService : IBattingProfileService
 
     // ── 4. Partnerships ───────────────────────────────────────────────────────
     private static async Task<List<PartnershipRow>> GetPartnershipsAsync(
-        ClickHouseConnection conn, uint playerId, uint? seasonId, uint? leagueId, CancellationToken ct)
+        ClickHouseConnection conn, uint playerId,
+        uint? seasonId, uint? leagueId, int? year, DateOnly? fromDate, DateOnly? toDate,
+        CancellationToken ct)
     {
-        var where = BuildPartnershipWhere(playerId, seasonId, leagueId);
+        var where = BuildPartnershipWhere(playerId, seasonId, leagueId, year, fromDate, toDate);
         var sql = $@"
             SELECT
                 if(batter1_id = {playerId}, batter2_id, batter1_id) AS partner_id,
-                count()                          AS partnership_count,
-                sum(toUInt64(runs_together))     AS total_runs,
-                sum(toUInt64(balls_together))    AS total_balls,
-                sum(toUInt64(fours_together))    AS total_fours,
-                sum(toUInt64(sixes_together))    AS total_sixes
+                count()                       AS partnership_count,
+                sum(toUInt64(runs_together))  AS total_runs,
+                sum(toUInt64(balls_together)) AS total_balls,
+                sum(toUInt64(fours_together)) AS total_fours,
+                sum(toUInt64(sixes_together)) AS total_sixes
             FROM lms.partnerships
             {where}
             GROUP BY partner_id
@@ -291,19 +335,29 @@ public class BattingProfileService : IBattingProfileService
         return "WHERE " + string.Join(" AND ", parts);
     }
 
-    private static string BuildBallEventsWhere(uint playerId, uint? seasonId, uint? leagueId)
+    private static string BuildBallEventsWhere(
+        uint playerId, uint? seasonId, uint? leagueId,
+        int? year, DateOnly? fromDate, DateOnly? toDate)
     {
         var parts = new List<string> { $"striker_id = {playerId}" };
         if (seasonId.HasValue) parts.Add($"season_id = {seasonId}");
         if (leagueId.HasValue) parts.Add($"league_id = {leagueId}");
+        if (year.HasValue)     parts.Add($"toYear(game_date) = {year}");
+        if (fromDate.HasValue) parts.Add($"game_date >= '{fromDate:yyyy-MM-dd}'");
+        if (toDate.HasValue)   parts.Add($"game_date <= '{toDate:yyyy-MM-dd}'");
         return "WHERE " + string.Join(" AND ", parts);
     }
 
-    private static string BuildPartnershipWhere(uint playerId, uint? seasonId, uint? leagueId)
+    private static string BuildPartnershipWhere(
+        uint playerId, uint? seasonId, uint? leagueId,
+        int? year, DateOnly? fromDate, DateOnly? toDate)
     {
         var parts = new List<string> { $"(batter1_id = {playerId} OR batter2_id = {playerId})" };
         if (seasonId.HasValue) parts.Add($"season_id = {seasonId}");
         if (leagueId.HasValue) parts.Add($"league_id = {leagueId}");
+        if (year.HasValue)     parts.Add($"toYear(game_date) = {year}");
+        if (fromDate.HasValue) parts.Add($"game_date >= '{fromDate:yyyy-MM-dd}'");
+        if (toDate.HasValue)   parts.Add($"game_date <= '{toDate:yyyy-MM-dd}'");
         return "WHERE " + string.Join(" AND ", parts);
     }
 }
