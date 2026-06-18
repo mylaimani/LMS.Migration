@@ -57,16 +57,27 @@ public class ScoringPattern
 
 public class RunDistribution
 {
-    public ulong Dots      { get; set; }
-    public ulong Ones      { get; set; }
-    public ulong Twos      { get; set; }
-    public ulong Threes    { get; set; }
-    public ulong Fours     { get; set; }
-    public ulong Sixes     { get; set; }
-    public ulong HomeRuns  { get; set; }
-    public ulong Steals    { get; set; }
-    public ulong TotalRuns { get; set; }
-    public ulong TotalBalls { get; set; }
+    public ulong Dots         { get; set; }
+    public ulong Ones         { get; set; }
+    public ulong Twos         { get; set; }
+    public ulong Threes       { get; set; }
+    public ulong Fours        { get; set; }
+    public ulong Sixes        { get; set; }
+    public ulong HomeRuns     { get; set; }
+    public ulong Steals       { get; set; }
+    public ulong TotalRuns    { get; set; }
+    public ulong TotalBalls   { get; set; }
+
+    /// <summary>
+    /// Runs accrued from illegal deliveries (wides, no-balls, penalty balls).
+    /// Includes: wide extras + no-ball extras + runs hit off the bat on no-balls.
+    /// SR treatment pending Wayne/Bjorn decision.
+    /// </summary>
+    public ulong PenaltyRuns  { get; set; }
+
+    /// <summary>Number of illegal deliveries (wides + no-balls) faced.</summary>
+    public ulong PenaltyBalls { get; set; }
+
     public double OverallStrikeRate => TotalBalls > 0
         ? Math.Round((double)TotalRuns / TotalBalls * 100, 2) : 0;
 }

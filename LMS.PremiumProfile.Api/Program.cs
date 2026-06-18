@@ -20,12 +20,16 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 builder.Services.AddScoped<IBattingProfileService>(_ => new BattingProfileService(chConn));
+builder.Services.AddScoped<IBowlingProfileService>(_ => new BowlingProfileService(chConn));
 
 // ── Build + run ───────────────────────────────────────────────────────────────
 var app = builder.Build();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+
+// TODO: re-enable API key/secret auth before going live
+// app.UseMiddleware<ApiKeyMiddleware>();
 
 app.MapControllers();
 

@@ -23,8 +23,14 @@ GROUP BY striker_id, season_id, league_id, division_id, venue_id, over_phase;
 TRUNCATE TABLE lms.player_bowling_phase;
 INSERT INTO lms.player_bowling_phase
 SELECT bowler_id, season_id, league_id, division_id, venue_id, over_phase,
-       sum(runs_off_bat + extras_wide + extras_no_ball), sum(is_legal_ball),
-       sum(is_wicket), sum(is_dot_ball)
+       sum(runs_off_bat + extras_wide + extras_no_ball),
+       sum(is_legal_ball), sum(is_wicket), sum(is_dot_ball),
+       countIf(extras_wide > 0), countIf(extras_no_ball > 0),
+       countIf(runs_off_bat = 6 AND is_legal_ball = 1),
+       countIf(runs_off_bat = 4 AND is_legal_ball = 1),
+       countIf(runs_off_bat = 3 AND is_legal_ball = 1),
+       countIf(runs_off_bat = 2 AND is_legal_ball = 1),
+       countIf(runs_off_bat = 1 AND is_legal_ball = 1)
 FROM lms.ball_events
 GROUP BY bowler_id, season_id, league_id, division_id, venue_id, over_phase;
 

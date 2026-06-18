@@ -370,17 +370,31 @@ CREATE TABLE IF NOT EXISTS lms.player_bowling_phase
     runs_conceded UInt64,
     legal_balls   UInt64,
     wickets       UInt64,
-    dots          UInt64
+    dots          UInt64,
+    wides         UInt64,
+    no_balls      UInt64,
+    sixes         UInt64,
+    fours         UInt64,
+    threes        UInt64,
+    twos          UInt64,
+    ones          UInt64
 )
 ENGINE = SummingMergeTree
 ORDER BY (bowler_id, season_id, league_id, division_id, venue_id, over_phase);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS lms.player_bowling_mv TO lms.player_bowling_phase AS
 SELECT bowler_id, season_id, league_id, division_id, venue_id, over_phase,
-       sum(runs_off_bat + extras_wide + extras_no_ball) AS runs_conceded,
-       sum(is_legal_ball)                               AS legal_balls,
-       sum(is_wicket)                                   AS wickets,
-       sum(is_dot_ball)                                 AS dots
+       sum(runs_off_bat + extras_wide + extras_no_ball)  AS runs_conceded,
+       sum(is_legal_ball)                                AS legal_balls,
+       sum(is_wicket)                                    AS wickets,
+       sum(is_dot_ball)                                  AS dots,
+       countIf(extras_wide > 0)                          AS wides,
+       countIf(extras_no_ball > 0)                       AS no_balls,
+       countIf(runs_off_bat = 6 AND is_legal_ball = 1)   AS sixes,
+       countIf(runs_off_bat = 4 AND is_legal_ball = 1)   AS fours,
+       countIf(runs_off_bat = 3 AND is_legal_ball = 1)   AS threes,
+       countIf(runs_off_bat = 2 AND is_legal_ball = 1)   AS twos,
+       countIf(runs_off_bat = 1 AND is_legal_ball = 1)   AS ones
 FROM lms.ball_events
 GROUP BY bowler_id, season_id, league_id, division_id, venue_id, over_phase;
 

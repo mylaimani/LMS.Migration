@@ -131,21 +131,28 @@ public class BattingProfileService : IBattingProfileService
         var where = BuildBallEventsWhere(playerId, seasonId, leagueId, year, fromDate, toDate);
 
         // 2a. Run distribution
-        // All counts restricted to is_legal_ball = 1 so they align with totalBalls.
-        // No-balls / penalty deliveries where runs_off_bat > 0 are intentionally excluded
-        // from the breakdown (they were causing a ~22 ball discrepancy vs totalBalls).
+        // All ball-type counts restricted to is_legal_ball = 1 so they align with totalBalls.
+        // No-balls / wide deliveries where runs_off_bat > 0 are intentionally excluded
+        // from the per-ball breakdown (they caused a ~22 ball discrepancy vs totalBalls).
+        // penaltyRuns = all runs from illegal deliveries (wide extras + no-ball extras + runs hit off no-balls).
+        // penaltyBalls = count of illegal deliveries faced.
+        // NOTE: totalRuns is runs off the bat only. Wayne/Bjorn to confirm if SR ball count
+        //       should include penalty deliveries too (pending decision).
         var distSql = $@"
             SELECT
-                countIf(runs_off_bat = 0 AND is_legal_ball = 1) AS dots,
-                countIf(runs_off_bat = 1 AND is_legal_ball = 1) AS ones,
-                countIf(runs_off_bat = 2 AND is_legal_ball = 1) AS twos,
-                countIf(runs_off_bat = 3 AND is_legal_ball = 1) AS threes,
-                countIf(runs_off_bat = 4 AND is_legal_ball = 1) AS fours,
-                countIf(runs_off_bat = 6 AND is_legal_ball = 1) AS sixes,
-                sum(toUInt64(home_runs))                         AS home_runs,
-                sum(toUInt64(steal))                             AS steals,
-                sum(toUInt64(runs_off_bat))                      AS total_runs,
-                sum(toUInt64(is_legal_ball))                     AS total_balls
+                countIf(runs_off_bat = 0 AND is_legal_ball = 1)                           AS dots,
+                countIf(runs_off_bat = 1 AND is_legal_ball = 1)                           AS ones,
+                countIf(runs_off_bat = 2 AND is_legal_ball = 1)                           AS twos,
+                countIf(runs_off_bat = 3 AND is_legal_ball = 1)                           AS threes,
+                countIf(runs_off_bat = 4 AND is_legal_ball = 1)                           AS fours,
+                countIf(runs_off_bat = 6 AND is_legal_ball = 1)                           AS sixes,
+                sum(toUInt64(home_runs))                                                   AS home_runs,
+                sum(toUInt64(steal))                                                       AS steals,
+                sum(toUInt64(runs_off_bat))                                                AS total_runs,
+                count()                                                                    AS total_balls,
+                sumIf(toUInt64(runs_off_bat) + toUInt64(extras_wide) + toUInt64(extras_no_ball),
+                      is_legal_ball = 0)                                                   AS penalty_runs,
+                countIf(is_legal_ball = 0)                                                 AS penalty_balls
             FROM lms.ball_events
             {where}";
 
@@ -156,16 +163,18 @@ public class BattingProfileService : IBattingProfileService
             using var reader = await cmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct))
             {
-                dist.Dots       = Convert.ToUInt64(reader.GetValue(0));
-                dist.Ones       = Convert.ToUInt64(reader.GetValue(1));
-                dist.Twos       = Convert.ToUInt64(reader.GetValue(2));
-                dist.Threes     = Convert.ToUInt64(reader.GetValue(3));
-                dist.Fours      = Convert.ToUInt64(reader.GetValue(4));
-                dist.Sixes      = Convert.ToUInt64(reader.GetValue(5));
-                dist.HomeRuns   = Convert.ToUInt64(reader.GetValue(6));
-                dist.Steals     = Convert.ToUInt64(reader.GetValue(7));
-                dist.TotalRuns  = Convert.ToUInt64(reader.GetValue(8));
-                dist.TotalBalls = Convert.ToUInt64(reader.GetValue(9));
+                dist.Dots         = Convert.ToUInt64(reader.GetValue(0));
+                dist.Ones         = Convert.ToUInt64(reader.GetValue(1));
+                dist.Twos         = Convert.ToUInt64(reader.GetValue(2));
+                dist.Threes       = Convert.ToUInt64(reader.GetValue(3));
+                dist.Fours        = Convert.ToUInt64(reader.GetValue(4));
+                dist.Sixes        = Convert.ToUInt64(reader.GetValue(5));
+                dist.HomeRuns     = Convert.ToUInt64(reader.GetValue(6));
+                dist.Steals       = Convert.ToUInt64(reader.GetValue(7));
+                dist.TotalRuns    = Convert.ToUInt64(reader.GetValue(8));
+                dist.TotalBalls   = Convert.ToUInt64(reader.GetValue(9));
+                dist.PenaltyRuns  = Convert.ToUInt64(reader.GetValue(10));
+                dist.PenaltyBalls = Convert.ToUInt64(reader.GetValue(11));
             }
         }
 
