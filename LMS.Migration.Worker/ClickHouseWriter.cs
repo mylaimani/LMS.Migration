@@ -58,6 +58,19 @@ namespace LMS.Migration.Worker
         }
 
         /// <summary>
+        /// Truncates lms.partnerships — used before a partnerships-only rerun
+        /// so the fixed parser rewrites clean data without MergeTree duplicates.
+        /// </summary>
+        public async Task TruncatePartnershipsAsync()
+        {
+            using var conn = new ClickHouseConnection(_connectionString);
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "TRUNCATE TABLE lms.partnerships";
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
         /// Removes any rows above the safe resume point (possibly partial
         /// flushes). Lightweight DELETE — requires ClickHouse 23.3+.
         /// </summary>
@@ -83,7 +96,7 @@ namespace LMS.Migration.Worker
             "score_at_ball", "wickets_at_ball", "game_date",
             "league_id", "division_id", "season_id", "season_name",
             "venue_id", "region_id", "country_id",
-            "home_runs", "steal", "double_play", "balls_per_over", "pitch_condition",
+            "home_runs", "steal", "double_play", "balls_per_over", "total_overs", "pitch_condition",
             "fielder_id", "keeper_id",
             "pulse_after_pct", "pulse_change_pct"
         };
@@ -111,7 +124,7 @@ namespace LMS.Migration.Worker
                 b.ScoreAtBall, b.WicketsAtBall, b.GameDate,
                 b.LeagueId, b.DivisionId, b.SeasonId, b.SeasonName ?? "",
                 b.VenueId, b.RegionId, b.CountryId,
-                b.HomeRuns, b.Steal, b.DoublePlay, b.BallsPerOver, b.PitchCondition,
+                b.HomeRuns, b.Steal, b.DoublePlay, b.BallsPerOver, b.TotalOvers, b.PitchCondition,
                 b.FielderId, b.KeeperId,
                 b.PulseAfterPct, b.PulseChangePct
             });

@@ -36,6 +36,7 @@ namespace LMS.Migration.Core.Models
         public byte Steal { get; set; }
         public byte DoublePlay { get; set; }
         public byte BallsPerOver { get; set; } = 5;
+        public byte TotalOvers { get; set; } = 20;
         public byte PitchCondition { get; set; }
 
         // Running state (computed during parse)
@@ -61,7 +62,8 @@ namespace LMS.Migration.Core.Models
         // Convenience flags used by parser/extractor logic only.
         // NOT inserted into ClickHouse — the table derives its own
         // MATERIALIZED columns (is_legal_ball, is_dot_ball, is_boundary,
-        // is_six, over_phase) at insert time.
+        // is_six) at insert time. over_phase is MATERIALIZED from total_overs
+        // + over_number using the LMS powerplay lookup.
         public bool IsLegalBall => ExtrasWide == 0 && ExtrasNoBall == 0;
         public bool IsBoundary => RunsOffBat == 4;
         public bool IsSix => RunsOffBat == 6;

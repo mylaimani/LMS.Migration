@@ -181,11 +181,12 @@ public class BowlingProfileService : IBowlingProfileService
             }
         }
 
-        // 2b. Over trend — cap at over_number <= 19 (0-indexed = overs 1–20).
-        // over_number 20+ are penalty/post-innings deliveries.
+        // 2b. Over trend — over_number is stored 1-indexed (1–20) in ball_events.
+        // Cap to BETWEEN 1 AND 20 to exclude any post-innings deliveries
+        // the scorer may have recorded beyond over 20.
         var trendWhereWithOverCap = where.Contains("WHERE")
-            ? where + " AND over_number <= 19"
-            : "WHERE over_number <= 19";
+            ? where + " AND over_number BETWEEN 1 AND 20"
+            : "WHERE over_number BETWEEN 1 AND 20";
 
         var trendSql = $@"
             SELECT over_number,
@@ -206,7 +207,7 @@ public class BowlingProfileService : IBowlingProfileService
             {
                 trend.Add(new BowlingOverTrendRow
                 {
-                    Over         = Convert.ToInt32(reader.GetValue(0)) + 1, // 0-indexed → 1-indexed
+                    Over         = Convert.ToInt32(reader.GetValue(0)), // stored 1-indexed, no adjustment needed
                     RunsConceded = Convert.ToUInt64(reader.GetValue(1)),
                     LegalBalls   = Convert.ToUInt64(reader.GetValue(2)),
                     Wickets      = Convert.ToUInt64(reader.GetValue(3)),

@@ -65,6 +65,73 @@ if (args.Length > 0 && args[0].Equals("clips", StringComparison.OrdinalIgnoreCas
     return;
 }
 
+// ── Partnerships-only rerun:  .\LMS.Migration.Worker.exe partnerships ──────
+// Use after a parser fix that only affects partnership tracking
+// (e.g. BatsmanRetired handling). Truncates lms.partnerships and rewrites
+// it from scratch without touching ball_events — much faster than a full rerun.
+if (args.Length > 0 && args[0].Equals("partnerships", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("Partnerships rerun: loading fixture metadata...");
+    var pMetaMap = await metaReader.LoadAllAsync();
+    var pParser  = new FixtureStateParser();
+
+    Console.WriteLine("Truncating lms.partnerships...");
+    await writer.TruncatePartnershipsAsync();
+    Console.WriteLine("Truncated. Re-parsing all fixtures for partnership data...");
+
+    int pTotal  = 0;
+    int pFailed = 0;
+    var pBuffer = new List<LMS.Migration.Core.Models.Partnership>(10_000);
+
+    async Task FlushPAsync()
+    {
+        if (pBuffer.Count == 0) return;
+        await writer.InsertPartnershipsAsync(pBuffer);
+        pTotal += pBuffer.Count;
+        Console.WriteLine($"  {pTotal} partnerships written so far...");
+        pBuffer.Clear();
+    }
+
+    await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsync(0))
+    {
+        try
+        {
+            var parsed = pParser.Parse(fixtureId, fixtureJson);
+            if (parsed.Balls.Count == 0 || parsed.Partnerships.Count == 0) continue;
+
+            pMetaMap.TryGetValue(fixtureId, out var meta);
+            var gameDate = meta != null && meta.FixtureDate != DateTime.UnixEpoch
+                ? meta.FixtureDate.Date
+                : parsed.GameDate;
+
+            foreach (var p in parsed.Partnerships)
+            {
+                p.LeagueId   = meta?.LeagueId   ?? 0;
+                p.DivisionId = meta?.DivisionId ?? 0;
+                p.SeasonId   = meta?.SeasonId   ?? 0;
+                p.SeasonName = meta?.SeasonName ?? "";
+                p.VenueId    = meta?.VenueId    ?? 0;
+                p.RegionId   = meta?.RegionId   ?? 0;
+                p.GameDate   = gameDate;
+            }
+
+            pBuffer.AddRange(parsed.Partnerships);
+            if (pBuffer.Count >= 10_000)
+                await FlushPAsync();
+        }
+        catch (Exception ex)
+        {
+            pFailed++;
+            Console.WriteLine($"[FAIL] {fixtureId} — {ex.Message}");
+        }
+    }
+
+    await FlushPAsync();
+    Console.WriteLine($"\nPartnerships rerun complete: {pTotal} rows written, {pFailed} fixtures failed.");
+    Console.WriteLine("Reminder: rebuild any partnership-based MVs if needed.");
+    return;
+}
+
 // ── Opposition strength inputs ─────────────────────────────────
 // Historical world ranking snapshots (twice weekly, StatisticsLMSRankingDate)
 // + running form guide. Each match uses the latest snapshot published

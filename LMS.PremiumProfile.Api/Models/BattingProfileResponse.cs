@@ -32,7 +32,7 @@ public class PhaseStatRow
     /// <summary>Powerplay | Middle | Death</summary>
     public string Phase       { get; set; } = "";
     public ulong  Runs        { get; set; }
-    public ulong  Balls       { get; set; }   // legal balls faced
+    public ulong  Balls       { get; set; }   // total balls faced including penalty (Rule 8)
     public ulong  Dismissals  { get; set; }
     public ulong  Boundaries  { get; set; }
     public ulong  Sixes       { get; set; }
@@ -62,8 +62,15 @@ public class RunDistribution
     public ulong Twos         { get; set; }
     public ulong Threes       { get; set; }
     public ulong Fours        { get; set; }
+    public ulong Fives        { get; set; }
     public ulong Sixes        { get; set; }
+    /// <summary>Count of home run events (runs_off_bat = 12 in the Runs-case parser path).</summary>
     public ulong HomeRuns     { get; set; }
+    /// <summary>
+    /// Total runs from home run deliveries (typically 12 each). Kept separate from Sixes
+    /// so that Dots×0 + Ones×1 + … + Sixes×6 + HomeRunRuns == TotalRuns.
+    /// </summary>
+    public ulong HomeRunRuns  { get; set; }
     public ulong Steals       { get; set; }
     public ulong TotalRuns    { get; set; }
     public ulong TotalBalls   { get; set; }
@@ -87,8 +94,9 @@ public class OverTrendRow
     /// <summary>1-indexed over number.</summary>
     public int    Over        { get; set; }
     public ulong  Runs        { get; set; }
-    public ulong  LegalBalls  { get; set; }
-    public double RunsPerBall => LegalBalls > 0 ? Math.Round((double)Runs / LegalBalls, 3) : 0;
+    /// <summary>All balls faced in this over including penalty deliveries (Rule 8).</summary>
+    public ulong  TotalBalls  { get; set; }
+    public double RunsPerBall => TotalBalls > 0 ? Math.Round((double)Runs / TotalBalls, 3) : 0;
     public double RunRate     => Math.Round(RunsPerBall * 5, 2);  // per over (LMS = 5 balls)
 }
 

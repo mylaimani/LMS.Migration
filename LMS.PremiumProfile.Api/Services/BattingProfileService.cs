@@ -55,8 +55,13 @@ public class BattingProfileService : IBattingProfileService
     }
 
     // ── 1. Phase stats ────────────────────────────────────────────────────────
-    // Uses lms.player_batting_phase MV when no date filter (fast).
-    // Falls back to ball_events when year/date filter is applied (MV has no game_date).
+    // Always queries ball_events directly so that:
+    //   (a) penalty deliveries are included in the ball count per LMS Rule 8
+    //   (b) date filters are supported natively
+    //
+    // NOTE: player_batting_phase MV only stores legal_balls (pre-penalty-fix).
+    //       Re-enable MV fast path once total_balls column is added to the MV
+    //       and the migration has been rerun.
     private static async Task<List<PhaseStatRow>> GetPhaseStatsAsync(
         ClickHouseConnection conn, uint playerId,
         uint? seasonId, uint? leagueId, int? year, DateOnly? fromDate, DateOnly? toDate,
@@ -64,33 +69,13 @@ public class BattingProfileService : IBattingProfileService
     {
         string sql;
 
-        bool hasDateFilter = year.HasValue || fromDate.HasValue || toDate.HasValue;
-
-        if (!hasDateFilter)
         {
-            // Fast path — pre-aggregated MV
-            var where = BuildPhaseWhere(playerId, seasonId, leagueId);
-            sql = $@"
-                SELECT over_phase,
-                       sum(runs)        AS runs,
-                       sum(legal_balls) AS legal_balls,
-                       sum(dismissals)  AS dismissals,
-                       sum(boundaries)  AS boundaries,
-                       sum(sixes)       AS sixes,
-                       sum(dots)        AS dots
-                FROM lms.player_batting_phase
-                {where}
-                GROUP BY over_phase
-                ORDER BY multiIf(over_phase='Powerplay',1, over_phase='Middle',2, 3)";
-        }
-        else
-        {
-            // Date-filtered path — ball_events
+            // ball_events path — count() gives total balls (legal + penalty) per Rule 8
             var where = BuildBallEventsWhere(playerId, seasonId, leagueId, year, fromDate, toDate);
             sql = $@"
                 SELECT over_phase,
                        sum(toUInt64(runs_off_bat))  AS runs,
-                       sum(toUInt64(is_legal_ball)) AS legal_balls,
+                       count()                      AS total_balls,
                        sum(toUInt64(is_wicket))     AS dismissals,
                        sum(toUInt64(is_boundary))   AS boundaries,
                        sum(toUInt64(is_six))        AS sixes,
@@ -131,22 +116,43 @@ public class BattingProfileService : IBattingProfileService
         var where = BuildBallEventsWhere(playerId, seasonId, leagueId, year, fromDate, toDate);
 
         // 2a. Run distribution
-        // All ball-type counts restricted to is_legal_ball = 1 so they align with totalBalls.
-        // No-balls / wide deliveries where runs_off_bat > 0 are intentionally excluded
-        // from the per-ball breakdown (they caused a ~22 ball discrepancy vs totalBalls).
-        // penaltyRuns = all runs from illegal deliveries (wide extras + no-ball extras + runs hit off no-balls).
-        // penaltyBalls = count of illegal deliveries faced.
-        // NOTE: totalRuns is runs off the bat only. Wayne/Bjorn to confirm if SR ball count
-        //       should include penalty deliveries too (pending decision).
+        // Run distribution notes:
+        //
+        // DOTS:    Legal deliveries only (a no-ball dot is not a batting dot).
+        //
+        // ONES–SIXES: Include no-ball deliveries (extras_wide = 0) so runs scored
+        //             off no-balls appear in the correct bucket.
+        //             Wides excluded (runs_off_bat = 0 on wide in LMS data).
+        //             Sixes exclude home_runs > 0 — when a batter hits 6 on the last
+        //             ball of the last over and qualifies for a home run, the parser
+        //             stores runs_off_bat = 12 (not 6), so the sixes bucket would miss
+        //             it and home_runs would double-count it. Use home_run_runs instead.
+        //
+        // HOME_RUNS:  Count of home run events (home_runs flag set in ball_events).
+        // HOME_RUN_RUNS: Total runs_off_bat from home run deliveries (typically 12
+        //             per event from the Runs-case parser path). Separate from sixes
+        //             so the distribution reconciles: sum(buckets) == total_runs.
+        //
+        // STEALS:   Count of steal events (runs go to non-striker, counted in total_runs).
+        //
+        // PENALTY:  penaltyRuns = all value on illegal deliveries (wide extras +
+        //           no-ball extras + runs scored off the bat on no-balls).
+        //           penaltyBalls = count of illegal deliveries faced.
         var distSql = $@"
             SELECT
                 countIf(runs_off_bat = 0 AND is_legal_ball = 1)                           AS dots,
-                countIf(runs_off_bat = 1 AND is_legal_ball = 1)                           AS ones,
-                countIf(runs_off_bat = 2 AND is_legal_ball = 1)                           AS twos,
-                countIf(runs_off_bat = 3 AND is_legal_ball = 1)                           AS threes,
-                countIf(runs_off_bat = 4 AND is_legal_ball = 1)                           AS fours,
-                countIf(runs_off_bat = 6 AND is_legal_ball = 1)                           AS sixes,
-                sum(toUInt64(home_runs))                                                   AS home_runs,
+                countIf(runs_off_bat = 1 AND extras_wide = 0)                             AS ones,
+                countIf(runs_off_bat = 2 AND extras_wide = 0)                             AS twos,
+                countIf(runs_off_bat = 3 AND extras_wide = 0)                             AS threes,
+                countIf(runs_off_bat = 4 AND extras_wide = 0)                             AS fours,
+                countIf(runs_off_bat = 5 AND extras_wide = 0)                             AS fives,
+                -- Exclude home run deliveries (runs_off_bat=12) from sixes bucket.
+                -- NOTE: alias must NOT be 'home_runs' -- that shadows the column name and
+                -- causes ClickHouse ILLEGAL_AGGREGATION when it resolves home_runs in
+                -- other aggregate expressions as the alias instead of the column.
+                countIf(runs_off_bat = 6 AND extras_wide = 0 AND home_runs = 0)           AS sixes,
+                countIf(home_runs > 0)                                                     AS home_run_count,
+                sum(if(home_runs > 0, toUInt64(runs_off_bat), 0))                         AS home_run_runs,
                 sum(toUInt64(steal))                                                       AS steals,
                 sum(toUInt64(runs_off_bat))                                                AS total_runs,
                 count()                                                                    AS total_balls,
@@ -168,26 +174,28 @@ public class BattingProfileService : IBattingProfileService
                 dist.Twos         = Convert.ToUInt64(reader.GetValue(2));
                 dist.Threes       = Convert.ToUInt64(reader.GetValue(3));
                 dist.Fours        = Convert.ToUInt64(reader.GetValue(4));
-                dist.Sixes        = Convert.ToUInt64(reader.GetValue(5));
-                dist.HomeRuns     = Convert.ToUInt64(reader.GetValue(6));
-                dist.Steals       = Convert.ToUInt64(reader.GetValue(7));
-                dist.TotalRuns    = Convert.ToUInt64(reader.GetValue(8));
-                dist.TotalBalls   = Convert.ToUInt64(reader.GetValue(9));
-                dist.PenaltyRuns  = Convert.ToUInt64(reader.GetValue(10));
-                dist.PenaltyBalls = Convert.ToUInt64(reader.GetValue(11));
+                dist.Fives        = Convert.ToUInt64(reader.GetValue(5));
+                dist.Sixes        = Convert.ToUInt64(reader.GetValue(6));
+                dist.HomeRuns     = Convert.ToUInt64(reader.GetValue(7));
+                dist.HomeRunRuns  = Convert.ToUInt64(reader.GetValue(8));
+                dist.Steals       = Convert.ToUInt64(reader.GetValue(9));
+                dist.TotalRuns    = Convert.ToUInt64(reader.GetValue(10));
+                dist.TotalBalls   = Convert.ToUInt64(reader.GetValue(11));
+                dist.PenaltyRuns  = Convert.ToUInt64(reader.GetValue(12));
+                dist.PenaltyBalls = Convert.ToUInt64(reader.GetValue(13));
             }
         }
 
-        // 2b. Over trend — cap at over_number <= 19 (0-indexed, = overs 1–20).
-        // over_number 20+ are penalty/post-innings deliveries that don't belong
-        // in the per-over chart (they were creating a spurious "over 21" bucket).
+        // 2b. Over trend — over_number is stored 1-indexed (1–20) in ball_events.
+        // Cap to BETWEEN 1 AND 20 to exclude any post-innings penalty deliveries
+        // that the scorer recorded beyond over 20.
         var trendWhereWithOverCap = where.Contains("WHERE")
-            ? where + " AND over_number <= 19"
-            : "WHERE over_number <= 19";
+            ? where + " AND over_number BETWEEN 1 AND 20"
+            : "WHERE over_number BETWEEN 1 AND 20";
         var trendSql = $@"
             SELECT over_number,
-                   sum(toUInt64(runs_off_bat))  AS runs,
-                   sum(toUInt64(is_legal_ball)) AS legal_balls
+                   sum(toUInt64(runs_off_bat)) AS runs,
+                   count()                     AS total_balls  -- all deliveries per Rule 8
             FROM lms.ball_events
             {trendWhereWithOverCap}
             GROUP BY over_number
@@ -202,9 +210,9 @@ public class BattingProfileService : IBattingProfileService
             {
                 trend.Add(new OverTrendRow
                 {
-                    Over       = Convert.ToInt32(reader.GetValue(0)) + 1, // 0-indexed → 1-indexed
+                    Over       = Convert.ToInt32(reader.GetValue(0)), // stored 1-indexed, no adjustment needed
                     Runs       = Convert.ToUInt64(reader.GetValue(1)),
-                    LegalBalls = Convert.ToUInt64(reader.GetValue(2)),
+                    TotalBalls = Convert.ToUInt64(reader.GetValue(2)),
                 });
             }
         }
@@ -313,7 +321,7 @@ public class BattingProfileService : IBattingProfileService
             GROUP BY partner_id
             HAVING total_balls >= 10
             ORDER BY total_runs DESC
-            LIMIT 20";
+            LIMIT 50";
 
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
@@ -336,7 +344,11 @@ public class BattingProfileService : IBattingProfileService
     }
 
     // ── WHERE clause builders ─────────────────────────────────────────────────
+    // Reserved for future MV fast path re-enable once player_batting_phase gains total_balls column.
+    // ReSharper disable once UnusedMember.Local
+#pragma warning disable IDE0051
     private static string BuildPhaseWhere(uint playerId, uint? seasonId, uint? leagueId)
+#pragma warning restore IDE0051
     {
         var parts = new List<string> { $"striker_id = {playerId}" };
         if (seasonId.HasValue) parts.Add($"season_id = {seasonId}");

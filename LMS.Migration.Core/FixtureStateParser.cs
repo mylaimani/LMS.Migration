@@ -107,24 +107,49 @@ namespace LMS.Migration.Core.Parsers
                     byte overNumber = (byte)(over.Value<int?>("OverNumber") ?? 0);
                     bool isFinalOver = overNumber >= inningsOvers;
 
-                    // Materialise actual deliveries (over Events also contain
-                    // FielderChanged etc.; wicket balls are often $refs)
-                    var ballObjs = new List<JObject>();
-                    foreach (var ballToken in over["Events"] as JArray ?? new JArray())
+                    // Materialise events in order: Ball deliveries AND BatsmanRetired
+                    // events must both be collected to keep correct sequence for
+                    // partnership tracking (retirements fall between balls).
+                    var overItems = new List<(bool IsRetirement, JObject Obj)>();
+                    foreach (var evToken in over["Events"] as JArray ?? new JArray())
                     {
-                        var resolved = R(ballToken);
-                        if (resolved != null && (resolved.Value<string>("$type") ?? "").EndsWith(".Ball"))
-                            ballObjs.Add(resolved);
+                        var resolved = R(evToken);
+                        if (resolved == null) continue;
+                        string evType = resolved.Value<string>("$type") ?? "";
+                        if (evType.EndsWith(".Ball"))
+                            overItems.Add((false, resolved));
+                        else if (evType.Contains("BatsmanRetired"))
+                            overItems.Add((true, resolved));
                     }
+                    int totalBalls = overItems.Count(x => !x.IsRetirement);
 
                     // RuleEngine state for this over
                     int bowlerExtrasSeen = 0;   // wides/no-balls already bowled this over
                     int nonExtraBallsSeen = 0;  // deliveries without bowler extras
 
                     byte ballSeq = 0;
-                    for (int bi = 0; bi < ballObjs.Count; bi++)
+                    int ballIndex = 0; // index among balls only (for home-run last-ball check)
+                    for (int i = 0; i < overItems.Count; i++)
                     {
-                        var ball = ballObjs[bi];
+                        var (isRetirement, item) = overItems[i];
+
+                        // ── BatsmanRetired: close the current partnership ────
+                        // A retirement is NOT a wicket, so without this the old
+                        // partnership would keep accumulating runs for every
+                        // subsequent batter until the next actual dismissal.
+                        if (isRetirement)
+                        {
+                            if (currentPartnership != null)
+                            {
+                                result.Partnerships.Add(currentPartnership);
+                                currentPartnership = null;
+                                partnershipNumber++;
+                            }
+                            continue;
+                        }
+
+                        var ball = item;
+                        ballIndex++;
                         ballSeq++;
 
                         var striker = R(ball["Striker"]);
@@ -147,6 +172,7 @@ namespace LMS.Migration.Core.Parsers
                             BattingTeamId = battingTeamId,
                             BowlingTeamId = bowlingTeamId,
                             BallsPerOver = result.BallsPerOver,
+                            TotalOvers = (byte)inningsOvers,
                             PitchCondition = result.PitchCondition,
                             GameDate = result.GameDate
                         };
@@ -176,7 +202,7 @@ namespace LMS.Migration.Core.Parsers
                                     // when 4 of 5 balls are already bowled,
                                     // scores 12 (HomeRunScore).
                                     if (runs == 6 && isFinalOver
-                                        && bi == ballObjs.Count - 1
+                                        && ballIndex == totalBalls
                                         && nonExtraBallsSeen == result.BallsPerOver - 1)
                                     {
                                         b.RunsOffBat += 12;
