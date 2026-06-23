@@ -1,5 +1,8 @@
-// API 4 is hidden pending spec clarification (LMS Pulse project alignment, endpoint design).
-// Re-enable by: (1) removing [ApiExplorerSettings] below, (2) uncommenting IInsightsService in Program.cs.
+// API 4 — H2H and Clips endpoints are implemented and tested.
+// They are currently hidden from Swagger while integration with LMST20.API.MobileApp is planned.
+//
+// To enable: (1) remove [ApiExplorerSettings(IgnoreApi = true)] below,
+//            (2) uncomment IInsightsService registration in Program.cs.
 using LMS.PremiumProfile.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;

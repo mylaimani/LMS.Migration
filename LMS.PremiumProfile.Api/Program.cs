@@ -24,7 +24,10 @@ builder.Services.AddSwaggerGen(c =>
 builder.Services.AddScoped<IBattingProfileService>(_ => new BattingProfileService(chConn));
 builder.Services.AddScoped<IBowlingProfileService>(_ => new BowlingProfileService(chConn));
 builder.Services.AddScoped<ITeamProfileService>(_ => new TeamProfileService(chConn));
-// API 4 (H2H / Pulse / Clips) — pending spec clarification; service not registered
+
+// API 4 — H2H and Clips are implemented and ready in InsightsController (currently hidden).
+// To enable: (1) remove [ApiExplorerSettings(IgnoreApi = true)] from InsightsController,
+//            (2) uncomment the registration below.
 // builder.Services.AddScoped<IInsightsService>(_ => new InsightsService(chConn));
 
 // ── Build + run ───────────────────────────────────────────────────────────────
@@ -58,7 +61,9 @@ app.UseExceptionHandler(errorApp =>
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// TODO: re-enable API key/secret auth before going live
+// API key + secret authentication (ApiKeyMiddleware) is implemented and ready.
+// Re-enable before production by uncommenting the line below and configuring
+// ApiAuth:ApiKey and ApiAuth:ApiSecret in appsettings or environment variables.
 // app.UseMiddleware<ApiKeyMiddleware>();
 
 // ── Diagnostic: GET /api/health ──────────────────────────────────────────────

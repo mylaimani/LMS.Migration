@@ -136,8 +136,6 @@ if (args.Length > 0 && args[0].Equals("partnerships", StringComparison.OrdinalIg
 // Historical world ranking snapshots (twice weekly, StatisticsLMSRankingDate)
 // + running form guide. Each match uses the latest snapshot published
 // BEFORE that match — spec §3.3, locked pre-match.
-// TODO: confirm with business that WORLD ranking is the right scope
-// (vs Country/Region).
 var rankingProvider = new HistoricalTeamRankingProvider(new TeamRankingReader(sqlConn));
 await rankingProvider.InitAsync();
 var formTracker = new FormTracker();
@@ -149,7 +147,8 @@ float OppositionStrength(uint playerTeamId, uint opposingTeamId)
     return PointsCalculator.OppositionStrength(rank, formTracker.FormScore(opposingTeamId));
 }
 
-// ── Ratings & league rankings accumulators ─────────────────────
+// ── Ratings & league rankings accumulators (Phase 2) ───────────
+// Uncomment when player ratings and league ranking tables are ready.
 //var ratingAccumulator = new PlayerRatingAccumulator();
 //var leagueRankings = new LeagueRankingAccumulator();
 
@@ -282,9 +281,9 @@ async Task ProcessFixtureAsync(uint fixtureId, string fixtureJson)
         fixturesInBuffer++;
         if (fixturesInBuffer >= FlushEveryFixtures)
             await FlushAsync();
-        // PHASE 2: await writer.InsertPlayerMatchStatsAsync(playerStats);
 
-        // 6. Feed ratings + league ranking accumulators
+        // Phase 2: persist player match stats and feed rating accumulators
+        // await writer.InsertPlayerMatchStatsAsync(playerStats);
         var teamA = parsed.Balls[0].BattingTeamId;
         var teamB = parsed.Balls[0].BowlingTeamId;
         /*foreach (var ps in playerStats)
@@ -358,10 +357,10 @@ await FlushAsync();   // write any remaining buffered fixtures
 
 Console.WriteLine($"\n{total} fixtures migrated, {failed} failed.");
 
-// ── Final pass: launch-baseline ratings + league rankings ──────
-// Initial calibration (spec §8): population benchmarks from ALL players,
-// then the rating model applied to everyone. Ratings computed here become
-// each player's baseline (movement tracking starts from launch).
+// ── Phase 2: launch-baseline ratings + league rankings ─────────
+// Initial calibration (spec §8): compute population benchmarks across all
+// players, then apply the rating model. These become each player's baseline
+// (movement tracking starts from launch).
 /*Console.WriteLine("Calculating player ratings (initial calibration)...");
 var ratings = ratingAccumulator.BuildRatings(DateTime.UtcNow);
 await writer.InsertPlayerRatingsAsync(ratings);

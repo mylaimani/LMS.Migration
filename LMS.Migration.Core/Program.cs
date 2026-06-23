@@ -1,2 +1,2 @@
-﻿// See https://aka.ms/new-console-template for more information
-Console.WriteLine("Hello, World!");
+﻿// LMS.Migration.Core is a class library — this file is unused.
+// Entry point for the migration is LMS.Migration.Worker/Program.cs.

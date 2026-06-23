@@ -344,9 +344,11 @@ public class BattingProfileService : IBattingProfileService
     }
 
     // ── WHERE clause builders ─────────────────────────────────────────────────
-    // Reserved for future MV fast path re-enable once player_batting_phase gains total_balls column.
-    // ReSharper disable once UnusedMember.Local
-#pragma warning disable IDE0051
+
+    // BuildPhaseWhere is reserved for the player_batting_phase MV fast path.
+    // It is not called today because the MV lacks the total_balls column needed to
+    // satisfy LMS Rule 8 (penalty ball counting). Re-enable once the MV is updated.
+#pragma warning disable IDE0051 // Remove unused private member
     private static string BuildPhaseWhere(uint playerId, uint? seasonId, uint? leagueId)
 #pragma warning restore IDE0051
     {

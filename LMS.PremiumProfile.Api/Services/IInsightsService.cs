@@ -10,7 +10,6 @@ public interface IInsightsService
         uint? seasonId, uint? leagueId,
         CancellationToken ct = default);
 
-    /// <summary>Ball-by-ball LMS Pulse (win probability) for a fixture.</summary>
     Task<PulseResponse> GetPulseAsync(uint fixtureId, CancellationToken ct = default);
 
     /// <summary>Highlight video clips for a fixture.</summary>

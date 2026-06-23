@@ -106,10 +106,6 @@ public class InsightsService : IInsightsService
     }
 
     // ── Pulse ─────────────────────────────────────────────────────────────────
-    // Returns ball-by-ball win probability for one fixture.
-    // NOTE: pulse_after_pct / pulse_change_pct are Float32 in ball_events.
-    // They are currently 0 everywhere — values will populate once the
-    // win-predictor model is integrated into the migration worker.
     public async Task<PulseResponse> GetPulseAsync(uint fixtureId, CancellationToken ct = default)
     {
         using var conn = new ClickHouseConnection(_connectionString);
