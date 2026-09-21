@@ -2,7 +2,7 @@ namespace LMS.Migration.Core.Models
 {
     /// <summary>
     /// One row per player per completed match — the Points Engine
-    /// (lms.player_match_stats). Drives ratings, rankings, legends.
+    /// (player_match_stats table). Drives ratings, rankings, legends.
     /// Nullable fields implement the spec NULL rules:
     ///   batting_* points are NULL when the player did not bat,
     ///   bowling_* points are NULL when the player did not bowl.

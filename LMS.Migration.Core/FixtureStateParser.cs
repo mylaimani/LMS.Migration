@@ -274,10 +274,7 @@ namespace LMS.Migration.Core.Parsers
                             StartOver = overNumber,
                             GameDate = result.GameDate
                         };
-                        currentPartnership.RunsTogether += b.RunsOffBat;
-                        if (b.IsLegalBall) currentPartnership.BallsTogether++;
-                        if (b.IsBoundary) currentPartnership.FoursTogether++;
-                        if (b.IsSix) currentPartnership.SixesTogether++;
+                        AddBallToPartnership(currentPartnership, b);
                         currentPartnership.EndOver = overNumber;
 
                         if (b.IsWicket)
@@ -350,6 +347,39 @@ namespace LMS.Migration.Core.Parsers
                 s.BallsBowled = (ushort)(completedOvers * ballsPerOver + extraBalls);
                 s.RunsConceded = (ushort)(bowl.Value<int?>("RunsConceded") ?? 0);
                 s.Wickets = (byte)(bowl.Value<int?>("Wickets") ?? 0);
+            }
+        }
+
+        // ── Partnership accumulation ─────────────────────────────────────
+        /// <summary>
+        /// Adds one delivery to the running partnership.
+        /// Stand total = every run added while the pair batted together (bat + all extras),
+        /// matching the team score. Balls use the LMS counting rule: legal deliveries plus
+        /// subsequent wides/no-balls (the 3-run ones), the same as BallRules.CountsAsBall.
+        /// Each batter's share: bat runs plus wide/no-ball penalties (credited to the
+        /// striker in LMS); byes and leg-byes count for the stand only.
+        /// </summary>
+        private static void AddBallToPartnership(Partnership partnership, BallEvent b)
+        {
+            int extrasInStand = b.ExtrasWide + b.ExtrasNoBall + b.ExtrasBye + b.ExtrasLegBye;
+            partnership.RunsTogether += (ushort)(b.RunsOffBat + extrasInStand);
+
+            bool countsAsBall = b.IsLegalBall || b.ExtrasWide >= 3 || b.ExtrasNoBall >= 3;
+            if (countsAsBall) partnership.BallsTogether++;
+
+            if (b.IsBoundary) partnership.FoursTogether++;
+            if (b.IsSix) partnership.SixesTogether++;
+
+            int strikerRuns = b.RunsOffBat + b.ExtrasWide + b.ExtrasNoBall;
+            if (b.StrikerId == partnership.Batter1Id)
+            {
+                partnership.Batter1Runs += (ushort)strikerRuns;
+                if (countsAsBall) partnership.Batter1Balls++;
+            }
+            else if (b.StrikerId == partnership.Batter2Id)
+            {
+                partnership.Batter2Runs += (ushort)strikerRuns;
+                if (countsAsBall) partnership.Batter2Balls++;
             }
         }
 

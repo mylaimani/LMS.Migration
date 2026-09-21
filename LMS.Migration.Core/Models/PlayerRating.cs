@@ -1,6 +1,6 @@
 namespace LMS.Migration.Core.Models
 {
-    /// <summary>Current rating state per player (lms.player_ratings).</summary>
+    /// <summary>Current rating state per player (player_ratings table).</summary>
     public class PlayerRating
     {
         public uint PlayerId { get; set; }

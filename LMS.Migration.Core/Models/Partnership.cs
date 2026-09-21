@@ -1,6 +1,6 @@
 namespace LMS.Migration.Core.Models
 {
-    /// <summary>One row per batting partnership (lms.partnerships).</summary>
+    /// <summary>One row per batting partnership (partnerships table).</summary>
     public class Partnership
     {
         public uint FixtureId { get; set; }
@@ -12,10 +12,19 @@ namespace LMS.Migration.Core.Models
         public uint BattingTeamId { get; set; }
         public uint BowlingTeamId { get; set; }
 
+        /// <summary>Every run added while the pair batted together — bat and extras (wides, no-balls, byes, leg-byes).</summary>
         public ushort RunsTogether { get; set; }
+        /// <summary>Balls counted by the LMS rule: legal deliveries plus subsequent wides/no-balls (3-run ones).</summary>
         public ushort BallsTogether { get; set; }
         public byte FoursTogether { get; set; }
         public byte SixesTogether { get; set; }
+
+        // Each batter's own share of the stand (LMS: wide/no-ball penalties are
+        // credited to the striker; byes and leg-byes belong to the stand only).
+        public ushort Batter1Runs { get; set; }
+        public ushort Batter1Balls { get; set; }
+        public ushort Batter2Runs { get; set; }
+        public ushort Batter2Balls { get; set; }
 
         public byte StartOver { get; set; }
         public byte EndOver { get; set; }

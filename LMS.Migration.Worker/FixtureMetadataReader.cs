@@ -1,4 +1,4 @@
-using Microsoft.Data.SqlClient;
+﻿using Microsoft.Data.SqlClient;
 
 namespace LMS.Migration.Worker
 {
@@ -64,25 +64,41 @@ namespace LMS.Migration.Worker
             _connectionString = connectionString;
         }
 
+        private const int MaxAttempts = 5;
+
         /// <summary>All fixtures in one query — use for the bulk migration.</summary>
         public async Task<Dictionary<uint, FixtureMetadata>> LoadAllAsync()
         {
-            var map = new Dictionary<uint, FixtureMetadata>();
-
-            using var conn = new SqlConnection(_connectionString);
-            await conn.OpenAsync();
-
-            using var cmd = new SqlCommand(BaseQuery, conn);
-            cmd.CommandTimeout = 600;
-
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            for (int attempt = 1; ; attempt++)
             {
-                var m = Map(reader);
-                map[m.FixtureId] = m;
-            }
+                try
+                {
+                    var map = new Dictionary<uint, FixtureMetadata>();
 
-            return map;
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+
+                    using var cmd = new SqlCommand(BaseQuery, conn);
+                    cmd.CommandTimeout = 900; // 15 min cap — a healthy SQL Server finishes this JOIN in seconds; if it hangs we want a visible retry, not a silent wait
+
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
+                    {
+                        var m = Map(reader);
+                        map[m.FixtureId] = m;
+                    }
+
+                    Console.WriteLine($"Fixture metadata loaded: {map.Count} fixtures.");
+                    return map;
+                }
+                catch (Exception ex) when (attempt < MaxAttempts)
+                {
+                    var delay = TimeSpan.FromSeconds(30 * attempt); // 30s / 60s / 90s / 120s
+                    Console.WriteLine($"[RETRY {attempt}/{MaxAttempts - 1}] LoadAllAsync (fixture metadata query on SQL Server): {ex.Message}");
+                    Console.WriteLine($"  Waiting {delay.TotalSeconds}s before retry...");
+                    await Task.Delay(delay);
+                }
+            }
         }
 
         /// <summary>Single fixture — use in the future live (per-match) mode.</summary>

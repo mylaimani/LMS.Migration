@@ -6,22 +6,25 @@ using LMS.Migration.Worker;
 // Connection strings come from environment variables — never commit
 // credentials. Set once per machine (then restart the terminal/VS):
 //   setx LMS_SQL_CONN "Server=localhost;Database=lastmanstands;Trusted_Connection=True;TrustServerCertificate=True;"
-//   setx LMS_CH_CONN  "Host=localhost;Port=8123;Database=lms;Username=lms_admin;Password=..."
+//   setx LMS_CH_CONN  "Host=localhost;Port=8123;Database=LMSClickHouseDB;Username=lms_admin;Password=..."
 var sqlConn = Environment.GetEnvironmentVariable("LMS_SQL_CONN")
     ?? throw new InvalidOperationException("Environment variable LMS_SQL_CONN is not set.");
 var chConn = Environment.GetEnvironmentVariable("LMS_CH_CONN")
     ?? throw new InvalidOperationException("Environment variable LMS_CH_CONN is not set.");
+// ClickHouse database holding the LMS tables. LMSClickHouseDB is the only database on both
+// local and live servers; override with  setx LMS_CH_DATABASE "<name>"  only if that changes.
+var chDatabase = Environment.GetEnvironmentVariable("LMS_CH_DATABASE") ?? "LMSClickHouseDB";
 
 // ── Services ───────────────────────────────────────────────────
 var fixtureReader = new SqlServerReader(sqlConn);
 var metaReader = new FixtureMetadataReader(sqlConn);
 var parser = new FixtureStateParser();
 var extractor = new PlayerStatsExtractor();
-var writer = new ClickHouseWriter(chConn);
+var writer = new ClickHouseWriter(chConn, chDatabase);
 
 // ── Clips-only mode:  .\LMS.Migration.Worker.exe clips ─────────
 // Migrates the Highlights table (sixes/fours/wickets with batsman, bowler,
-// keeper, fielder ids + clip URL) into lms.clips. Independent of the main
+// keeper, fielder ids + clip URL) into the clips table. Independent of the main
 // ball-by-ball migration — safe to run before, after, or alongside it.
 if (args.Length > 0 && args[0].Equals("clips", StringComparison.OrdinalIgnoreCase))
 {
@@ -66,18 +69,31 @@ if (args.Length > 0 && args[0].Equals("clips", StringComparison.OrdinalIgnoreCas
 }
 
 // ── Partnerships-only rerun:  .\LMS.Migration.Worker.exe partnerships ──────
+//                    resume:  .\LMS.Migration.Worker.exe partnerships resume
 // Use after a parser fix that only affects partnership tracking
-// (e.g. BatsmanRetired handling). Truncates lms.partnerships and rewrites
+// (e.g. BatsmanRetired handling). Truncates partnerships and rewrites
 // it from scratch without touching ball_events — much faster than a full rerun.
+// "resume" skips the truncate and continues after the highest fixture already
+// written, so a run killed by a SQL Server drop-out does not start from zero.
 if (args.Length > 0 && args[0].Equals("partnerships", StringComparison.OrdinalIgnoreCase))
 {
     Console.WriteLine("Partnerships rerun: loading fixture metadata...");
     var pMetaMap = await metaReader.LoadAllAsync();
     var pParser  = new FixtureStateParser();
 
-    Console.WriteLine("Truncating lms.partnerships...");
-    await writer.TruncatePartnershipsAsync();
-    Console.WriteLine("Truncated. Re-parsing all fixtures for partnership data...");
+    uint pResumeAfter = 0;
+    bool pResume = args.Length > 1 && args[1].Equals("resume", StringComparison.OrdinalIgnoreCase);
+    if (pResume)
+    {
+        pResumeAfter = await writer.GetPartnershipsResumePointAsync();
+        Console.WriteLine($"Resuming after fixture {pResumeAfter} (highest fixture already in partnerships)...");
+    }
+    else
+    {
+        Console.WriteLine("Truncating partnerships...");
+        await writer.TruncatePartnershipsAsync();
+        Console.WriteLine("Truncated. Re-parsing all fixtures for partnership data...");
+    }
 
     int pTotal  = 0;
     int pFailed = 0;
@@ -92,7 +108,7 @@ if (args.Length > 0 && args[0].Equals("partnerships", StringComparison.OrdinalIg
         pBuffer.Clear();
     }
 
-    await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsync(0))
+    await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsync(pResumeAfter))
     {
         try
         {
@@ -129,6 +145,103 @@ if (args.Length > 0 && args[0].Equals("partnerships", StringComparison.OrdinalIg
     await FlushPAsync();
     Console.WriteLine($"\nPartnerships rerun complete: {pTotal} rows written, {pFailed} fixtures failed.");
     Console.WriteLine("Reminder: rebuild any partnership-based MVs if needed.");
+    return;
+}
+
+// ── Player match stats rerun:  .\LMS.Migration.Worker.exe playerstats ──────
+// Truncates player_match_stats and rewrites it from scratch by
+// re-parsing all fixtures. Use when the Points Engine logic changes or
+// when player_match_stats was never populated (e.g. first-time run).
+if (args.Length > 0 && args[0].Equals("playerstats", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("Player stats rerun: loading fixture metadata...");
+    var psMetaMap   = await metaReader.LoadAllAsync();
+    var psParser    = new FixtureStateParser();
+    var psExtractor = new PlayerStatsExtractor();
+
+    // Historical rankings needed for opposition strength
+    var psRankingProvider = new HistoricalTeamRankingProvider(new TeamRankingReader(sqlConn));
+    await psRankingProvider.InitAsync();
+    var psFormTracker = new FormTracker();
+    float PsOppositionStrength(uint playerTeamId, uint opposingTeamId)
+    {
+        int rank = psRankingProvider.GetRank(opposingTeamId);
+        return PointsCalculator.OppositionStrength(rank, psFormTracker.FormScore(opposingTeamId));
+    }
+
+    Console.WriteLine("Truncating player_match_stats...");
+    await writer.TruncatePlayerMatchStatsAsync();
+    Console.WriteLine("Truncated. Re-parsing all fixtures for player stats...");
+
+    var psBuffer = new List<LMS.Migration.Core.Models.PlayerMatchStats>(2_000);
+    int psTotal = 0, psFailed = 0;
+
+    await foreach (var (psFixtureId, psJson) in fixtureReader.ReadAllFixturesAsync(0))
+    {
+        try
+        {
+            var psParsed = psParser.Parse(psFixtureId, psJson);
+            if (psParsed.Balls.Count == 0) continue;
+
+            psMetaMap.TryGetValue(psFixtureId, out var psMeta);
+            var psGameDate = psMeta != null && psMeta.FixtureDate != DateTime.UnixEpoch
+                ? psMeta.FixtureDate.Date : psParsed.GameDate;
+
+            foreach (var b in psParsed.Balls)
+            {
+                b.LeagueId   = psMeta?.LeagueId   ?? 0;
+                b.DivisionId = psMeta?.DivisionId ?? 0;
+                b.SeasonId   = psMeta?.SeasonId   ?? 0;
+                b.SeasonName = psMeta?.SeasonName ?? "";
+                b.VenueId    = psMeta?.VenueId    ?? b.VenueId;
+                b.RegionId   = psMeta?.RegionId   ?? b.RegionId;
+                b.CountryId  = psMeta?.CountryId  ?? b.CountryId;
+                b.GameDate   = psGameDate;
+            }
+
+            var psMatchResultRaw = psMeta?.RainedOut == true ? "RainedOut" : psParsed.MatchResultRaw;
+            var psMatchInfo = psExtractor.BuildMatchInfo(psFixtureId, psParsed.Balls, psParsed.InningsScores, psMatchResultRaw);
+
+            await psRankingProvider.AdvanceToAsync(psMatchInfo.GameDate);
+            var psStats = psExtractor.Build(psParsed.Balls, psParsed.PlayerSummaries, psMatchInfo,
+                oppositionStrengthLookup: PsOppositionStrength);
+
+            psBuffer.AddRange(psStats);
+            if (psBuffer.Count >= 2_000)
+            {
+                await writer.InsertPlayerMatchStatsAsync(psBuffer);
+                psTotal += psBuffer.Count;
+                psBuffer.Clear();
+                Console.WriteLine($"  {psTotal} player-match-stat rows written...");
+            }
+
+            var psTeamA = psParsed.Balls[0].BattingTeamId;
+            var psTeamB = psParsed.Balls[0].BowlingTeamId;
+            if (psMatchInfo.IsNoResult || psMatchInfo.WinningTeamId == 0)
+            {
+                psFormTracker.Record(psTeamA, 0);
+                psFormTracker.Record(psTeamB, 0);
+            }
+            else
+            {
+                psFormTracker.Record(psMatchInfo.WinningTeamId, +1);
+                psFormTracker.Record(psMatchInfo.WinningTeamId == psTeamA ? psTeamB : psTeamA, -1);
+            }
+        }
+        catch (Exception ex)
+        {
+            psFailed++;
+            Console.WriteLine($"[FAIL] {psFixtureId} — {ex.Message}");
+        }
+    }
+
+    if (psBuffer.Count > 0)
+    {
+        await writer.InsertPlayerMatchStatsAsync(psBuffer);
+        psTotal += psBuffer.Count;
+    }
+
+    Console.WriteLine($"\nPlayer stats rerun complete: {psTotal} rows written, {psFailed} fixtures failed.");
     return;
 }
 
@@ -182,8 +295,9 @@ if (!catchupMode)
 // ClickHouse prefers few large inserts over many small ones. Buffer
 // ~200 fixtures (~40k ball rows) per insert for a large speedup.
 const int FlushEveryFixtures = 200;
-var ballBuffer = new List<LMS.Migration.Core.Models.BallEvent>(50_000);
-var partnershipBuffer = new List<LMS.Migration.Core.Models.Partnership>(4_000);
+var ballBuffer             = new List<LMS.Migration.Core.Models.BallEvent>(50_000);
+var partnershipBuffer      = new List<LMS.Migration.Core.Models.Partnership>(4_000);
+var playerMatchStatsBuffer = new List<LMS.Migration.Core.Models.PlayerMatchStats>(2_000);
 int fixturesInBuffer = 0;
 
 async Task FlushAsync()
@@ -191,8 +305,10 @@ async Task FlushAsync()
     if (fixturesInBuffer == 0) return;
     await writer.InsertBallEventsAsync(ballBuffer);
     await writer.InsertPartnershipsAsync(partnershipBuffer);
+    await writer.InsertPlayerMatchStatsAsync(playerMatchStatsBuffer);
     ballBuffer.Clear();
     partnershipBuffer.Clear();
+    playerMatchStatsBuffer.Clear();
     fixturesInBuffer = 0;
 }
 
@@ -283,7 +399,7 @@ async Task ProcessFixtureAsync(uint fixtureId, string fixtureJson)
             await FlushAsync();
 
         // Phase 2: persist player match stats and feed rating accumulators
-        // await writer.InsertPlayerMatchStatsAsync(playerStats);
+        playerMatchStatsBuffer.AddRange(playerStats);
         var teamA = parsed.Balls[0].BattingTeamId;
         var teamB = parsed.Balls[0].BowlingTeamId;
         /*foreach (var ps in playerStats)

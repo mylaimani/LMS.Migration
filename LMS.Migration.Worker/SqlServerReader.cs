@@ -10,8 +10,12 @@ namespace LMS.Migration.Worker
     /// </summary>
     public class SqlServerReader
     {
-        private const int BatchSize = 200;
-        private const int MaxAttempts = 4;
+        // FixtureState JSON blobs are large (100–500 KB each).
+        // 50 rows per batch keeps SQL Server buffer pool pressure manageable.
+        // Increase back to 200 if running against a high-memory SQL instance.
+        private const int BatchSize    = 20;   // was 50 — SQL Server dropped the pipe twice at 50 (fixtures 128507, 397374)
+        private const int MaxAttempts  = 6;
+        private const int InterBatchMs = 200;   // brief pause between batches to let SQL Server release memory
 
         private readonly string _connectionString;
 
@@ -37,6 +41,9 @@ namespace LMS.Migration.Worker
                     if (!string.IsNullOrEmpty(json))
                         yield return (id, json);
                 }
+
+                // Give SQL Server time to release buffer pool memory between batches.
+                await Task.Delay(InterBatchMs);
             }
         }
 
@@ -102,7 +109,7 @@ namespace LMS.Migration.Worker
                 catch (Exception ex) when (attempt < MaxAttempts)
                 {
                     Console.WriteLine($"[RETRY {attempt}/{MaxAttempts - 1}] reading batch after fixture {after}: {ex.Message}");
-                    await Task.Delay(TimeSpan.FromSeconds(5 * attempt));
+                    await Task.Delay(TimeSpan.FromSeconds(10 * attempt));   // 10,20,30,40,50 s — lets SQL Server recover
                 }
             }
         }

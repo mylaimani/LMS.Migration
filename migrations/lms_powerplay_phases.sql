@@ -28,14 +28,14 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- 1. Add total_overs column (default 20 for any already-migrated rows)
-ALTER TABLE lms.ball_events
+ALTER TABLE LMSClickHouseDB.ball_events
     ADD COLUMN IF NOT EXISTS total_overs UInt8 DEFAULT 20
     AFTER balls_per_over;
 
 -- 2. Rewrite over_phase MATERIALIZED expression using LMS powerplay boundaries.
 --    Existing rows keep their old value until the migration is rerun
 --    (MATERIALIZED columns only recompute at insert time).
-ALTER TABLE lms.ball_events
+ALTER TABLE LMSClickHouseDB.ball_events
     MODIFY COLUMN over_phase LowCardinality(String) MATERIALIZED
         multiIf(
             -- Powerplay (P1): first overs of innings

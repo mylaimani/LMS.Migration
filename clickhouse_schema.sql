@@ -5,14 +5,14 @@
 -- Run: clickhouse-client --user lms_admin --password *** --multiquery < clickhouse_schema.sql
 -- =====================================================================
 
-CREATE DATABASE IF NOT EXISTS lms;
+CREATE DATABASE IF NOT EXISTS LMSClickHouseDB;
 
 -- =====================================================================
--- Table 1 — lms.ball_events  (one row per ball bowled)
+-- Table 1 — LMSClickHouseDB.ball_events  (one row per ball bowled)
 -- Ordered by (bowler_id, striker_id, fixture_id) so H2H queries hit
 -- co-located data.
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS lms.ball_events
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.ball_events
 (
     fixture_id        UInt32,
     innings_number    UInt8,
@@ -72,10 +72,10 @@ PARTITION BY toYYYYMM(game_date)
 ORDER BY (bowler_id, striker_id, fixture_id, innings_number, over_number, ball_sequence);
 
 -- =====================================================================
--- Table 2 — lms.player_match_stats  (Points Engine — one row per player
+-- Table 2 — LMSClickHouseDB.player_match_stats  (Points Engine — one row per player
 -- per completed match). Drives ratings, rankings, legends, leaderboards.
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS lms.player_match_stats
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.player_match_stats
 (
     fixture_id                  UInt32,
     player_id                   UInt32,
@@ -141,9 +141,9 @@ PARTITION BY toYYYYMM(game_date)
 ORDER BY (player_id, game_date, fixture_id);
 
 -- =====================================================================
--- Table 3 — lms.partnerships  (one row per batting partnership)
+-- Table 3 — LMSClickHouseDB.partnerships  (one row per batting partnership)
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS lms.partnerships
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.partnerships
 (
     fixture_id          UInt32,
     innings_number      UInt8,
@@ -152,11 +152,15 @@ CREATE TABLE IF NOT EXISTS lms.partnerships
     batter2_id          UInt32,
     batting_team_id     UInt32,
     bowling_team_id     UInt32,
-    runs_together       UInt16,
-    balls_together      UInt16,
+    runs_together       UInt16,           -- bat + all extras while the pair batted together
+    balls_together      UInt16,           -- LMS rule: legal balls + subsequent (3-run) wides/no-balls
     run_rate            Float32,          -- runs / (balls/5)
     fours_together      UInt8,
     sixes_together      UInt8,
+    batter1_runs        UInt16 DEFAULT 0, -- batter1's share of the stand (bat + wide/no-ball credit)
+    batter1_balls       UInt16 DEFAULT 0,
+    batter2_runs        UInt16 DEFAULT 0,
+    batter2_balls       UInt16 DEFAULT 0,
     start_over          UInt8,
     end_over            UInt8,
     over_phase          LowCardinality(String),
@@ -173,9 +177,9 @@ PARTITION BY toYYYYMM(game_date)
 ORDER BY (batter1_id, batter2_id, fixture_id);
 
 -- =====================================================================
--- Table 4 — lms.clips  (one row per video clip, linked to exact ball)
+-- Table 4 — LMSClickHouseDB.clips  (one row per video clip, linked to exact ball)
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS lms.clips
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.clips
 (
     clip_id         UInt64,
     fixture_id      UInt32,
@@ -202,10 +206,10 @@ PARTITION BY toYYYYMM(game_date)
 ORDER BY (striker_id, bowler_id, fixture_id, clip_id);
 
 -- =====================================================================
--- Table 5 — lms.player_ratings  (current rating state, one row per player)
+-- Table 5 — LMSClickHouseDB.player_ratings  (current rating state, one row per player)
 -- ReplacingMergeTree keeps the latest row per player_id.
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS lms.player_ratings
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.player_ratings
 (
     player_id                   UInt32,
     batting_games_used          UInt16,
@@ -241,11 +245,11 @@ ENGINE = ReplacingMergeTree(last_updated)
 ORDER BY player_id;
 
 -- =====================================================================
--- Table 6 — lms.league_rankings  (live league leaderboard)
+-- Table 6 — LMSClickHouseDB.league_rankings  (live league leaderboard)
 -- One row per player + team + league + division + season.
 -- RAW points only — no opposition strength, no divisor, no runner.
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS lms.league_rankings
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.league_rankings
 (
     player_id                UInt32,
     team_id                  UInt32,
@@ -268,10 +272,10 @@ ENGINE = ReplacingMergeTree(last_updated)
 ORDER BY (league_id, division_id, season_id, player_id, team_id);
 
 -- =====================================================================
--- Table 7 — lms.global_rankings_snapshot  (permanent monthly prestige
+-- Table 7 — LMSClickHouseDB.global_rankings_snapshot  (permanent monthly prestige
 -- rankings — never overwritten)
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS lms.global_rankings_snapshot
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.global_rankings_snapshot
 (
     snapshot_id           String,        -- e.g. GLOBAL_RANKINGS_2026_05
     snapshot_date         Date,
@@ -303,7 +307,7 @@ ORDER BY (snapshot_id, ranking_scope, ranking_category, rank);
 -- =====================================================================
 
 -- MV 1: H2H batter vs bowler career stats
-CREATE TABLE IF NOT EXISTS lms.h2h_stats
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.h2h_stats
 (
     bowler_id   UInt32,
     striker_id  UInt32,
@@ -317,7 +321,7 @@ CREATE TABLE IF NOT EXISTS lms.h2h_stats
 ENGINE = SummingMergeTree
 ORDER BY (bowler_id, striker_id);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS lms.h2h_stats_mv TO lms.h2h_stats AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS LMSClickHouseDB.h2h_stats_mv TO LMSClickHouseDB.h2h_stats AS
 SELECT bowler_id, striker_id,
        sum(is_legal_ball)              AS legal_balls,
        sum(runs_off_bat)               AS runs,
@@ -325,11 +329,11 @@ SELECT bowler_id, striker_id,
        sum(is_six)                     AS sixes,
        sum(is_boundary)                AS boundaries,
        sum(is_dot_ball)                AS dots
-FROM lms.ball_events
+FROM LMSClickHouseDB.ball_events
 GROUP BY bowler_id, striker_id;
 
 -- MV 2: player batting by season/league/venue/phase
-CREATE TABLE IF NOT EXISTS lms.player_batting_phase
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.player_batting_phase
 (
     striker_id  UInt32,
     season_id   UInt32,
@@ -347,7 +351,7 @@ CREATE TABLE IF NOT EXISTS lms.player_batting_phase
 ENGINE = SummingMergeTree
 ORDER BY (striker_id, season_id, league_id, division_id, venue_id, over_phase);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS lms.player_batting_mv TO lms.player_batting_phase AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS LMSClickHouseDB.player_batting_mv TO LMSClickHouseDB.player_batting_phase AS
 SELECT striker_id, season_id, league_id, division_id, venue_id, over_phase,
        sum(runs_off_bat)  AS runs,
        sum(is_legal_ball) AS legal_balls,
@@ -355,11 +359,11 @@ SELECT striker_id, season_id, league_id, division_id, venue_id, over_phase,
        sum(is_boundary)   AS boundaries,
        sum(is_six)        AS sixes,
        sum(is_dot_ball)   AS dots
-FROM lms.ball_events
+FROM LMSClickHouseDB.ball_events
 GROUP BY striker_id, season_id, league_id, division_id, venue_id, over_phase;
 
 -- MV 3: bowler economy/wickets/dot% by season/league/venue/phase
-CREATE TABLE IF NOT EXISTS lms.player_bowling_phase
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.player_bowling_phase
 (
     bowler_id     UInt32,
     season_id     UInt32,
@@ -382,7 +386,7 @@ CREATE TABLE IF NOT EXISTS lms.player_bowling_phase
 ENGINE = SummingMergeTree
 ORDER BY (bowler_id, season_id, league_id, division_id, venue_id, over_phase);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS lms.player_bowling_mv TO lms.player_bowling_phase AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS LMSClickHouseDB.player_bowling_mv TO LMSClickHouseDB.player_bowling_phase AS
 SELECT bowler_id, season_id, league_id, division_id, venue_id, over_phase,
        sum(runs_off_bat + extras_wide + extras_no_ball)  AS runs_conceded,
        sum(is_legal_ball)                                AS legal_balls,
@@ -395,11 +399,11 @@ SELECT bowler_id, season_id, league_id, division_id, venue_id, over_phase,
        countIf(runs_off_bat = 3 AND is_legal_ball = 1)   AS threes,
        countIf(runs_off_bat = 2 AND is_legal_ball = 1)   AS twos,
        countIf(runs_off_bat = 1 AND is_legal_ball = 1)   AS ones
-FROM lms.ball_events
+FROM LMSClickHouseDB.ball_events
 GROUP BY bowler_id, season_id, league_id, division_id, venue_id, over_phase;
 
 -- MV 4: team scoring patterns by phase
-CREATE TABLE IF NOT EXISTS lms.team_phase
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.team_phase
 (
     batting_team_id UInt32,
     season_id       UInt32,
@@ -414,17 +418,17 @@ CREATE TABLE IF NOT EXISTS lms.team_phase
 ENGINE = SummingMergeTree
 ORDER BY (batting_team_id, season_id, league_id, venue_id, over_phase);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS lms.team_phase_mv TO lms.team_phase AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS LMSClickHouseDB.team_phase_mv TO LMSClickHouseDB.team_phase AS
 SELECT batting_team_id, season_id, league_id, venue_id, over_phase,
        sum(runs_off_bat)  AS runs,
        sum(is_legal_ball) AS legal_balls,
        sum(is_wicket)     AS wickets,
        sum(is_boundary)   AS boundaries
-FROM lms.ball_events
+FROM LMSClickHouseDB.ball_events
 GROUP BY batting_team_id, season_id, league_id, venue_id, over_phase;
 
 -- MV 5: league / regional / national averages
-CREATE TABLE IF NOT EXISTS lms.league_avg
+CREATE TABLE IF NOT EXISTS LMSClickHouseDB.league_avg
 (
     league_id   UInt32,
     division_id UInt32,
@@ -441,12 +445,12 @@ CREATE TABLE IF NOT EXISTS lms.league_avg
 ENGINE = SummingMergeTree
 ORDER BY (league_id, division_id, region_id, country_id, season_id, over_phase);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS lms.league_avg_mv TO lms.league_avg AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS LMSClickHouseDB.league_avg_mv TO LMSClickHouseDB.league_avg AS
 SELECT league_id, division_id, region_id, country_id, season_id, over_phase,
        sum(runs_off_bat)  AS runs,
        sum(is_legal_ball) AS legal_balls,
        sum(is_wicket)     AS wickets,
        sum(is_boundary)   AS boundaries,
        sum(is_six)        AS sixes
-FROM lms.ball_events
+FROM LMSClickHouseDB.ball_events
 GROUP BY league_id, division_id, region_id, country_id, season_id, over_phase;

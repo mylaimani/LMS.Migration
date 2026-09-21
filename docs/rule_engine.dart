@@ -4,6 +4,10 @@ class RuleEngine {
   static const int HomeRunScore = 12;
   static const int SubsequentBowlerExtrasScore = 3;
 
+  /*LMS Rule: Maximum 8 wickets per innings — when the 8th wicket falls
+    the innings is immediately closed. No exceptions.*/
+  static const int MaxWicketsPerInnings = 8;
+
   final dtos.OutdoorCricketFixtureState _fixtureState;
 
   RuleEngine(this._fixtureState);
@@ -87,11 +91,20 @@ class RuleEngine {
   }
 
   void applyEvent(dtos.Ball ball) {
+    // Hard rule: reject any ball delivered after the innings is already closed
+    // (8 wickets already fallen). No exceptions.
+    if (_isInningsClosed()) return;
+
     //REFACTOR: Consider splitting rule engine into parts
     _processOverCounts(ball);
     _processRuns(ball);
     _processExtras(ball);
     _processWickets(ball);
+  }
+
+  /*LMS Rule: Innings is closed when 8 wickets have fallen.*/
+  bool _isInningsClosed() {
+    return _fixtureState.getCurrentInnings().score.wickets >= MaxWicketsPerInnings;
   }
 
   void _processOverCounts(dtos.Ball ball) {
@@ -131,6 +144,9 @@ class RuleEngine {
 
   void _processWickets(dtos.Ball ball) {
     for (dtos.Wicket wicket in ball.ballResults.where((x) => x is dtos.Wicket)) {
+      // Hard rule: never record more than MaxWicketsPerInnings wickets.
+      if (_fixtureState.getCurrentInnings().score.wickets >= MaxWicketsPerInnings) break;
+
       _fixtureState.getCurrentInnings().score.wickets++;
       if (wicket is dtos.BowlerCreditedWithWicket) ball.bowler.wickets++;
       if (wicket is dtos.Stumped) ball.keeper.stumpings++;
@@ -138,6 +154,11 @@ class RuleEngine {
       if (wicket is dtos.Caught && wicket.catcher != null && wicket.catcher.id == ball.fielder.id) ball.fielder.catches++;
       if (wicket is dtos.RunOut && wicket.thrower != null && wicket.thrower.id == ball.fielder.id) ball.fielder.runOuts++;
       if (wicket is dtos.DoublePlay && wicket.fielder != null && wicket.fielder.id == ball.fielder.id) ball.fielder.doublePlay++;
+
+      // LMS Rule: when the 8th wicket falls, immediately close the innings.
+      if (_fixtureState.getCurrentInnings().score.wickets >= MaxWicketsPerInnings) {
+        _fixtureState.getCurrentInnings().completed = true;
+      }
     }
   }
 

@@ -2,7 +2,7 @@ using LMS.Migration.Core.Models;
 
 namespace LMS.Migration.Core
 {
-    /// <summary>One row per player + team + league + division + season (lms.league_rankings).</summary>
+    /// <summary>One row per player + team + league + division + season (league_rankings table).</summary>
     public class LeagueRankingEntry
     {
         public uint PlayerId { get; set; }

@@ -1,6 +1,6 @@
 namespace LMS.Migration.Core.Models
 {
-    /// <summary>One row per ball bowled (lms.ball_events).</summary>
+    /// <summary>One row per ball bowled (ball_events table).</summary>
     public class BallEvent
     {
         // Identity

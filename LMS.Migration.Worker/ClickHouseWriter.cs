@@ -13,10 +13,16 @@ namespace LMS.Migration.Worker
     public class ClickHouseWriter
     {
         private readonly string _connectionString;
+        private readonly string _database;
 
-        public ClickHouseWriter(string connectionString)
+        /// <param name="databaseName">
+        /// ClickHouse database that holds the LMS tables. LMSClickHouseDB is the only database on
+        /// both local and live servers (the old "lms" name is gone), so that is the default.
+        /// </param>
+        public ClickHouseWriter(string connectionString, string databaseName = "LMSClickHouseDB")
         {
             _connectionString = connectionString;
+            _database = databaseName;
         }
 
         /// <summary>All fixture ids already in ball_events (for catch-up reconciliation).</summary>
@@ -26,7 +32,7 @@ namespace LMS.Migration.Worker
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT DISTINCT fixture_id FROM lms.ball_events";
+            cmd.CommandText = $"SELECT DISTINCT fixture_id FROM {_database}.ball_events";
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
                 ids.Add(Convert.ToUInt32(reader.GetValue(0)));
@@ -39,6 +45,21 @@ namespace LMS.Migration.Worker
         /// anything above the smallest max may be partially written).
         /// Returns 0 when the tables are empty.
         /// </summary>
+        /// <summary>
+        /// Highest fixture already in partnerships — the safe resume point for a
+        /// partnerships-only rerun. Fixtures are read in id order and a fixture's rows are
+        /// never split across flushes, so everything up to this id is complete.
+        /// </summary>
+        public async Task<uint> GetPartnershipsResumePointAsync()
+        {
+            using var conn = new ClickHouseConnection(_connectionString);
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"SELECT max(fixture_id) FROM {_database}.partnerships";
+            var result = await cmd.ExecuteScalarAsync();
+            return result == null || result == DBNull.Value ? 0u : Convert.ToUInt32(result);
+        }
+
         public async Task<uint> GetResumePointAsync()
         {
             using var conn = new ClickHouseConnection(_connectionString);
@@ -46,7 +67,7 @@ namespace LMS.Migration.Worker
 
             uint Min(uint a, uint b) => a < b ? a : b;
             uint safe = uint.MaxValue;
-            foreach (var table in new[] { "lms.ball_events", "lms.partnerships" })
+            foreach (var table in new[] { $"{_database}.ball_events", $"{_database}.partnerships" })
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"SELECT max(fixture_id) FROM {table}";
@@ -58,7 +79,19 @@ namespace LMS.Migration.Worker
         }
 
         /// <summary>
-        /// Truncates lms.partnerships — used before a partnerships-only rerun
+        /// Truncates player_match_stats — used before a player-stats rerun.
+        /// </summary>
+        public async Task TruncatePlayerMatchStatsAsync()
+        {
+            using var conn = new ClickHouseConnection(_connectionString);
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"TRUNCATE TABLE {_database}.player_match_stats";
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// Truncates partnerships — used before a partnerships-only rerun
         /// so the fixed parser rewrites clean data without MergeTree duplicates.
         /// </summary>
         public async Task TruncatePartnershipsAsync()
@@ -66,7 +99,7 @@ namespace LMS.Migration.Worker
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "TRUNCATE TABLE lms.partnerships";
+            cmd.CommandText = $"TRUNCATE TABLE {_database}.partnerships";
             await cmd.ExecuteNonQueryAsync();
         }
 
@@ -78,7 +111,7 @@ namespace LMS.Migration.Worker
         {
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
-            foreach (var table in new[] { "lms.ball_events", "lms.partnerships", "lms.player_match_stats" })
+            foreach (var table in new[] { $"{_database}.ball_events", $"{_database}.partnerships", $"{_database}.player_match_stats" })
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"DELETE FROM {table} WHERE fixture_id > {safeFixtureId}";
@@ -108,7 +141,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = "lms.ball_events",
+                DestinationTableName = $"{_database}.ball_events",
                 ColumnNames = BallEventColumns,
                 BatchSize = 10000
             };
@@ -138,6 +171,7 @@ namespace LMS.Migration.Worker
             "batter1_id", "batter2_id", "batting_team_id", "bowling_team_id",
             "runs_together", "balls_together", "run_rate",
             "fours_together", "sixes_together",
+            "batter1_runs", "batter1_balls", "batter2_runs", "batter2_balls",
             "start_over", "end_over", "over_phase", "game_date",
             "league_id", "division_id", "season_id", "season_name",
             "venue_id", "region_id"
@@ -152,7 +186,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = "lms.partnerships",
+                DestinationTableName = $"{_database}.partnerships",
                 ColumnNames = PartnershipColumns,
                 BatchSize = 5000
             };
@@ -164,6 +198,7 @@ namespace LMS.Migration.Worker
                 p.Batter1Id, p.Batter2Id, p.BattingTeamId, p.BowlingTeamId,
                 p.RunsTogether, p.BallsTogether, p.RunRate,
                 p.FoursTogether, p.SixesTogether,
+                p.Batter1Runs, p.Batter1Balls, p.Batter2Runs, p.Batter2Balls,
                 p.StartOver, p.EndOver, p.OverPhase, p.GameDate,
                 p.LeagueId, p.DivisionId, p.SeasonId, p.SeasonName ?? "",
                 p.VenueId, p.RegionId
@@ -200,7 +235,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = "lms.player_match_stats",
+                DestinationTableName = $"{_database}.player_match_stats",
                 ColumnNames = PlayerMatchStatsColumns,
                 BatchSize = 5000
             };
@@ -246,7 +281,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = "lms.clips",
+                DestinationTableName = $"{_database}.clips",
                 ColumnNames = ClipColumns,
                 BatchSize = 10000
             };
@@ -288,7 +323,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = "lms.player_ratings",
+                DestinationTableName = $"{_database}.player_ratings",
                 ColumnNames = PlayerRatingColumns,
                 BatchSize = 10000
             };
@@ -330,7 +365,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = "lms.league_rankings",
+                DestinationTableName = $"{_database}.league_rankings",
                 ColumnNames = LeagueRankingColumns,
                 BatchSize = 10000
             };

@@ -1,6 +1,6 @@
 namespace LMS.Migration.Core.Models
 {
-    /// <summary>One row per highlight video clip (lms.clips), sourced from
+    /// <summary>One row per highlight video clip (clips table), sourced from
     /// the SQL Server Highlights table.</summary>
     public class ClipRecord
     {
