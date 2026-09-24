@@ -1,5 +1,6 @@
 using LMS.Migration.Core;
 using LMS.Migration.Core.Parsers;
+using LMS.Migration.Core.Pulse;
 using LMS.Migration.Worker;
 
 // ── Configuration ──────────────────────────────────────────────
@@ -329,6 +330,11 @@ async Task ProcessFixtureAsync(uint fixtureId, string fixtureJson)
             Console.WriteLine($"[SKIP] {fixtureId} — no balls found");
             return;
         }
+
+        // 1b. LMS Pulse — fill pulse_after_pct / pulse_change_pct on every ball
+        //     by replaying the balls in order (24 Sep 2026). Feeds the app's
+        //     Live Insights screen via PremiumProfile api/pulse/{fixtureId}.
+        PulseReplayer.FillPulse(parsed);
 
         // 2. Context metadata from the preloaded dictionary
         metaMap.TryGetValue(fixtureId, out var meta);

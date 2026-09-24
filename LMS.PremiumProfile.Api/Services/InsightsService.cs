@@ -116,7 +116,7 @@ public class InsightsService : IInsightsService
             SELECT
                 innings_number,
                 over_number,
-                ball_in_over,
+                ball_sequence,
                 batting_team_id,
                 striker_id,
                 bowler_id,
@@ -126,10 +126,14 @@ public class InsightsService : IInsightsService
                 is_boundary,
                 home_runs,
                 pulse_after_pct,
-                pulse_change_pct
+                pulse_change_pct,
+                is_legal_ball
             FROM lms.ball_events
             WHERE fixture_id = {fixtureId}
-            ORDER BY innings_number, over_number, ball_in_over";
+            ORDER BY innings_number, over_number, ball_sequence";
+        // by Mani (24 Sep 2026): was "ball_in_over", a column that does not exist -
+        // the worker writes ball_sequence - so this query failed for every fixture.
+        // is_legal_ball added so the app can leave wides out of a batter's journey.
 
         var balls = new List<PulseBallRow>();
         using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -150,6 +154,7 @@ public class InsightsService : IInsightsService
                 IsHomeRun     = Convert.ToUInt32(reader.GetValue(10)) > 0,
                 PulseAfterPct  = Convert.ToSingle(reader.GetValue(11)),
                 PulseChangePct = Convert.ToSingle(reader.GetValue(12)),
+                IsLegalBall    = Convert.ToUInt32(reader.GetValue(13)) > 0,
             });
         }
 

@@ -19,6 +19,14 @@ namespace LMS.Migration.Core.Parsers
         public uint RegionId { get; set; }
         public byte CountryId { get; set; }
         public byte PitchCondition { get; set; }
+
+        /// <summary>
+        /// Players the GameSetup event said are playing, per side. LMS Pulse
+        /// needs these as the dismissals available - a short team has fewer
+        /// than 8. 0 means not found (Pulse then assumes 8).
+        /// </summary>
+        public int BattingFirstPlayerCount { get; set; }
+        public int BowlingFirstPlayerCount { get; set; }
     }
 
     /// <summary>
@@ -59,6 +67,8 @@ namespace LMS.Migration.Core.Parsers
             result.RegionId = root.Value<uint?>("RegionId") ?? 0;
             result.CountryId = (byte)(root.Value<int?>("CountryId") ?? 0);
             result.PitchCondition = (byte)(R(root["ExtraFixtureInformation"])?.Value<int?>("PitchCondition") ?? 0);
+            result.BattingFirstPlayerCount = (R(root["BattingFirst"])?["Players"] as JArray)?.Count ?? 0;
+            result.BowlingFirstPlayerCount = (R(root["BowlingFirst"])?["Players"] as JArray)?.Count ?? 0;
 
             // Game date + per-ball timestamps from root Events (BallBowled)
             var ballTimestamps = new Queue<DateTime>();

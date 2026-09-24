@@ -30,4 +30,6 @@ public class PulseBallRow
     public float  PulseAfterPct  { get; set; }
     /// <summary>Change in win probability caused by this ball (+/-).</summary>
     public float  PulseChangePct { get; set; }
+    /// <summary>False for a wide or no-ball. Same meaning as IsLegalBall in the live SignalR history.</summary>
+    public bool   IsLegalBall    { get; set; }
 }
