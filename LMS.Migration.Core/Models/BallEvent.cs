@@ -65,6 +65,15 @@ namespace LMS.Migration.Core.Models
         // is_six) at insert time. over_phase is MATERIALIZED from total_overs
         // + over_number using the LMS powerplay lookup.
         public bool IsLegalBall => ExtrasWide == 0 && ExtrasNoBall == 0;
+
+        /// <summary>
+        /// True when this delivery moved the over's ball count on, by the LMS rule
+        /// engine: set by the parser. Differs from IsLegalBall for a SECOND or later
+        /// wide/no-ball in a non-final over - it is an extra (3 runs) AND counts as
+        /// a ball. Pulse must use this, not IsLegalBall, to count balls bowled.
+        /// Not inserted into ClickHouse.
+        /// </summary>
+        public bool CountsAsBall { get; set; } = true;
         public bool IsBoundary => RunsOffBat == 4;
         public bool IsSix => RunsOffBat == 6;
     }

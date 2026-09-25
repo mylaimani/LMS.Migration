@@ -20,8 +20,17 @@ namespace LMS.Migration.Core.Pulse
 	///   ball one of innings two   : the innings-break number, i.e.
 	///                               100 - first innings final win %
 	///
-	/// Uses the ball stream's own running score, not the official innings
-	/// score, so the target and the runs needed always agree with the balls.
+	/// Kept in line with the live scoring server (code review, 25 Sep 2026):
+	///   1. balls are counted with BallEvent.CountsAsBall (LMS rule engine: a
+	///      second or later wide/no-ball in a non-final over counts as a ball);
+	///   2. scorer corrections are NOT applied. The saved game does not record
+	///      when a correction was made, and ball_events has one row per real
+	///      ball, so there is nowhere honest to put it; spreading it over earlier
+	///      balls would credit it to the wrong batters (code review 25 Sep). Every
+	///      row uses the ball stream's own score. The PulseHistory API on the
+	///      scoring server shows a correction as its own end-of-innings entry;
+	///   3. runs off a re-bowled wide/no-ball count towards momentum on the next
+	///      delivery that counts as a ball, as PulseStateStore does live.
 	/// Innings beyond two (none expected) are left at 0.
 	/// </summary>
 	public static class PulseReplayer
@@ -52,7 +61,7 @@ namespace LMS.Migration.Core.Pulse
 
 			foreach ( var ball in balls )
 			{
-				if ( ball.IsLegalBall ) legalBallsBowled++;
+				if ( ball.CountsAsBall ) legalBallsBowled++;
 
 				var totalBalls = ball.TotalOvers * ball.BallsPerOver;
 				if ( totalBalls <= 0 ) continue;
@@ -80,9 +89,9 @@ namespace LMS.Migration.Core.Pulse
 			var previousPct = inningsBreakChasePct;
 			var legalBallsBowled = 0;
 
-			// Runs per legal ball for the momentum window. Runs off a wide or
-			// no-ball are carried onto the next legal ball - the live server
-			// sees them the same way, because they arrive before the ball count moves.
+			// Runs per counted ball for the momentum window. Runs off a re-bowled
+			// wide/no-ball are carried onto the next delivery that counts as a ball,
+			// the same as PulseStateStore.RecordBall on the live server.
 			var runsPerLegalBall = new List<int>();
 			var runsSinceLastLegalBall = 0;
 			var scoreBefore = 0;
@@ -94,7 +103,7 @@ namespace LMS.Migration.Core.Pulse
 				runsSinceLastLegalBall += ball.ScoreAtBall - scoreBefore;
 				scoreBefore = ball.ScoreAtBall;
 
-				if ( ball.IsLegalBall )
+				if ( ball.CountsAsBall )
 				{
 					legalBallsBowled++;
 					runsPerLegalBall.Add( runsSinceLastLegalBall );
