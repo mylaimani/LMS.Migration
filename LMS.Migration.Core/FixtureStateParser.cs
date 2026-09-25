@@ -12,6 +12,14 @@ namespace LMS.Migration.Core.Parsers
         /// authoritative (live scorer corrections update these, not the
         /// ball stream). Used for match result and Match RPBall.</summary>
         public List<(uint BattingTeamId, int Runs, byte Wickets)> InningsScores { get; set; } = new();
+
+        /// <summary>
+        /// Same order as InningsScores: true when the saved state really had a
+        /// Runs value for that innings. InningsScores turns a missing value into 0,
+        /// so without this a genuine score of 0 cannot be told apart from "not
+        /// recorded" (LMS Pulse needs the difference, 25 Sep 2026).
+        /// </summary>
+        public List<bool> InningsScoreRecorded { get; set; } = new();
         public string? MatchResultRaw { get; set; }
         public DateTime GameDate { get; set; } = DateTime.UnixEpoch;
         public byte BallsPerOver { get; set; } = 5;
@@ -98,6 +106,7 @@ namespace LMS.Migration.Core.Parsers
 
                 // Official innings score (authoritative for result/RPBall)
                 var scoreObj = R(innings["Score"]);
+                result.InningsScoreRecorded.Add(scoreObj?.Value<int?>("Runs") != null);
                 result.InningsScores.Add((battingTeamId,
                     scoreObj?.Value<int?>("Runs") ?? 0,
                     (byte)(scoreObj?.Value<int?>("Wickets") ?? 0)));
@@ -260,6 +269,14 @@ namespace LMS.Migration.Core.Parsers
                                     break;
                             }
                         }
+
+                        // Does this delivery move the over count on? Same rule as
+                        // RuleEngine._ballShouldIncreaseOverCount in live scoring:
+                        // a delivery without a wide/no-ball always counts; a wide or
+                        // no-ball counts only if an earlier one was already bowled in
+                        // this over, and never in the final over (it is re-bowled).
+                        // Decided with the counters BEFORE they move on for this ball.
+                        b.CountsAsBall = !thisBallHasBowlerExtras || (!isFinalOver && bowlerExtrasSeen > 0);
 
                         // Advance the RuleEngine per-over counters
                         if (thisBallHasBowlerExtras) bowlerExtrasSeen++;
