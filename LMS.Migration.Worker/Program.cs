@@ -23,6 +23,27 @@ var parser = new FixtureStateParser();
 var extractor = new PlayerStatsExtractor();
 var writer = new ClickHouseWriter(chConn, chDatabase);
 
+// By Mani
+// ── Opposition strength test mode:  .\LMS.Migration.Worker.exe opposition 515388 486870 ──
+// Category 1 (ball-by-ball opposition uplift) for the given fixtures using each opponent's rating as it
+// was BEFORE the fixture (Rep_PlayerRatingHistory, staging). Writes rating_source = 'BeforeFixture'.
+// Reads balls from ClickHouse ball_events, so SQL Server FixtureState is not touched.
+if (args.Length > 0 && args[0].Equals("opposition", StringComparison.OrdinalIgnoreCase))
+{
+    await OppositionStrengthMode.RunAsync(args, chConn, chDatabase, writer);
+    return;
+}
+
+// ── Opposition export to SQL Server:  .\LMS.Migration.Worker.exe export-opposition pairs|results [fromYear] [toYear] ──
+// Copies ball-by-ball opposition data from ClickHouse into Abser's Rep_PlayerOppositionBalls /
+// Rep_PlayerOppositionStrength tables (LMS_RATING_SQL_CONN) so his rating rebuild can join to them.
+if (args.Length > 0 && args[0].Equals("export-opposition", StringComparison.OrdinalIgnoreCase))
+{
+    await OppositionStrengthExportMode.RunAsync(args, chConn, chDatabase);
+    return;
+}
+// End of Mani
+
 // ── Clips-only mode:  .\LMS.Migration.Worker.exe clips ─────────
 // Migrates the Highlights table (sixes/fours/wickets with batsman, bowler,
 // keeper, fielder ids + clip URL) into the clips table. Independent of the main

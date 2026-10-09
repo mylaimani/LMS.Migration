@@ -382,5 +382,42 @@ namespace LMS.Migration.Worker
 
             await bulkCopy.WriteToServerAsync(rows);
         }
+
+        // By Mani
+        private static readonly string[] PlayerOppositionStrengthColumns =
+        {
+            "fixture_id", "game_date", "player_id", "role", "team_id",
+            "balls_counted", "opponents_counted", "opponents_without_rating",
+            "effective_opposition_rating", "uplift_percent",
+            "rating_source", "formula_version", "calculated_at"
+        };
+
+        /// <summary>Category 1 (ball-by-ball opposition uplift) rows. Re-running a fixture replaces its rows (ReplacingMergeTree).</summary>
+        public async Task InsertPlayerOppositionStrengthAsync(List<LMS.Migration.Core.OppositionStrength.PlayerOppositionStrengthRow> rows)
+        {
+            if (rows.Count == 0) return;
+
+            using var conn = new ClickHouseConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var bulkCopy = new ClickHouseBulkCopy(conn)
+            {
+                DestinationTableName = $"{_database}.player_opposition_strength",
+                ColumnNames = PlayerOppositionStrengthColumns,
+                BatchSize = 10000
+            };
+            await bulkCopy.InitAsync();
+
+            var values = rows.Select(r => new object[]
+            {
+                r.FixtureId, r.GameDate, r.PlayerId, r.Role, r.TeamId,
+                (ushort)r.BallsCounted, (byte)r.OpponentsCounted, (byte)r.OpponentsWithoutRating,
+                (float)r.EffectiveOppositionRating, (float)r.UpliftPercent,
+                r.RatingSource, (ushort)r.FormulaVersion, r.CalculatedAt
+            });
+
+            await bulkCopy.WriteToServerAsync(values);
+        }
+        // End of Mani
     }
 }
