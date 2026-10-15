@@ -80,6 +80,7 @@ namespace LMS.Migration.Worker
             table.Columns.Add("BattingTeamId", typeof(int));
             table.Columns.Add("BowlingTeamId", typeof(int));
             table.Columns.Add("BallsCounted", typeof(short));
+            table.Columns.Add("DeliveriesCounted", typeof(short));   // 15 Oct 2026 - every delivery, re-bowled ones included
             return table;
         }
 
@@ -91,12 +92,14 @@ namespace LMS.Migration.Worker
                     striker_id, bowler_id,
                     any(batting_team_id) AS batting_team_id,
                     any(bowling_team_id) AS bowling_team_id,
-                    sum(toUInt64({CountsAsBall})) AS balls_counted
+                    sum(toUInt64({CountsAsBall})) AS balls_counted,
+                    count() AS deliveries_counted
                 FROM {clickHouseDatabase}.ball_events
                 WHERE toYear(game_date) = {year}
                   AND striker_id != 0 AND bowler_id != 0
-                GROUP BY fixture_id, striker_id, bowler_id
-                HAVING balls_counted > 0";
+                GROUP BY fixture_id, striker_id, bowler_id";
+            // 15 Oct 2026: no HAVING balls_counted > 0 any more - a pair whose only delivery was a re-bowled
+            // wide/no-ball is written with BallsCounted 0, DeliveriesCounted 1 (uplift now weights by deliveries).
 
             using var connection = new ClickHouseConnection(clickHouseConnectionString);
             await connection.OpenAsync();
@@ -112,7 +115,8 @@ namespace LMS.Migration.Worker
                     Convert.ToInt32(reader.GetValue(3)),
                     Convert.ToInt32(reader.GetValue(4)),
                     Convert.ToInt32(reader.GetValue(5)),
-                    Convert.ToInt16(reader.GetValue(6)));
+                    Convert.ToInt16(reader.GetValue(6)),
+                    Convert.ToInt16(reader.GetValue(7)));
             }
         }
 

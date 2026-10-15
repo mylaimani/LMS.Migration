@@ -23,6 +23,7 @@ BEGIN
         BattingTeamId   INT          NOT NULL,
         BowlingTeamId   INT          NOT NULL,
         BallsCounted    SMALLINT     NOT NULL,   -- LMS over rule applied (first wide/no-ball re-bowled, later ones count)
+        DeliveriesCounted SMALLINT   NOT NULL CONSTRAINT DF_Rep_PlayerOppositionBalls_DeliveriesCounted DEFAULT 0,   -- every delivery (15 Oct 2026)
         LoadedAt        DATETIME2(0) NOT NULL CONSTRAINT DF_Rep_PlayerOppositionBalls_LoadedAt DEFAULT SYSUTCDATETIME(),
         CONSTRAINT PK_Rep_PlayerOppositionBalls PRIMARY KEY CLUSTERED (FixtureId, BatsmanId, BowlerId)
     );

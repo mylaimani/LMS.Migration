@@ -42,6 +42,14 @@ if (args.Length > 0 && args[0].Equals("export-opposition", StringComparison.Ordi
     await OppositionStrengthExportMode.RunAsync(args, chConn, chDatabase);
     return;
 }
+
+// ── Merged player ids (15 Oct 2026) ──────────────────────────────
+// Spawtz merges accounts (dbo.MergedUsersLog) but never rewrites FixtureState, so the JSON still
+// carries the old id. dbo.Rep_MergedUserMap (migrations/merged_user_map_sql_server.sql) gives
+// old id -> surviving id; every player id below goes through mergedUserRemapper.Resolve.
+var mergedUserMapReader = new MergedUserMapReader(sqlConn);
+var mergedUserRemapper = new MergedUserRemapper(await mergedUserMapReader.LoadAsync());
+Console.WriteLine($"Loaded {mergedUserRemapper.MapSize} merged player ids from Rep_MergedUserMap.");
 // End of Mani
 
 // ── Clips-only mode:  .\LMS.Migration.Worker.exe clips ─────────
@@ -69,6 +77,8 @@ if (args.Length > 0 && args[0].Equals("clips", StringComparison.OrdinalIgnoreCas
         {
             clip.GameDate = clip.BallTimestamp.Date;
         }
+
+        mergedUserRemapper.ApplyToClip(clip);   // By Mani 15 Oct 2026 - merged player ids
 
         clipBuffer.Add(clip);
         if (clipBuffer.Count >= 5000)
@@ -136,6 +146,7 @@ if (args.Length > 0 && args[0].Equals("partnerships", StringComparison.OrdinalIg
         {
             var parsed = pParser.Parse(fixtureId, fixtureJson);
             if (parsed.Balls.Count == 0 || parsed.Partnerships.Count == 0) continue;
+            mergedUserRemapper.Apply(parsed);   // By Mani 15 Oct 2026 - merged player ids
 
             pMetaMap.TryGetValue(fixtureId, out var meta);
             var gameDate = meta != null && meta.FixtureDate != DateTime.UnixEpoch
@@ -204,6 +215,7 @@ if (args.Length > 0 && args[0].Equals("playerstats", StringComparison.OrdinalIgn
         {
             var psParsed = psParser.Parse(psFixtureId, psJson);
             if (psParsed.Balls.Count == 0) continue;
+            mergedUserRemapper.Apply(psParsed);   // By Mani 15 Oct 2026 - merged player ids
 
             psMetaMap.TryGetValue(psFixtureId, out var psMeta);
             var psGameDate = psMeta != null && psMeta.FixtureDate != DateTime.UnixEpoch
@@ -299,11 +311,19 @@ Console.WriteLine($"Loaded metadata for {metaMap.Count} fixtures.");
 // new games are still being played.
 bool catchupMode = args.Length > 0 && args[0].Equals("catchup", StringComparison.OrdinalIgnoreCase);
 
+// By Mani 15 Oct 2026
+// ── Reprocess mode:  .\LMS.Migration.Worker.exe reprocess 460442 449394 ... ──
+// Deletes the given fixtures from ClickHouse and writes them again from FixtureState
+// (merged player ids applied). Used to test the merge map on one fixture and later for
+// corrected matches. Remember rebuild_mvs.sql afterwards - the MV targets keep the old rows.
+bool reprocessMode = args.Length > 1 && args[0].Equals("reprocess", StringComparison.OrdinalIgnoreCase);
+// End of Mani
+
 // ── Resume support (full-migration mode only) ───────────────────
 // If a previous run crashed, continue after the last fully-flushed fixture.
 // Anything above the safe point (possibly partial flushes) is deleted.
 uint startAfter = 0;
-if (!catchupMode)
+if (!catchupMode && !reprocessMode)   // By Mani 15 Oct 2026: reprocess must never delete "rows above resume point"
 {
     startAfter = await writer.GetResumePointAsync();
     if (startAfter > 0)
@@ -351,6 +371,18 @@ async Task ProcessFixtureAsync(uint fixtureId, string fixtureJson)
             Console.WriteLine($"[SKIP] {fixtureId} — no balls found");
             return;
         }
+
+        // By Mani 15 Oct 2026
+        // 1a. Merged player ids: old id -> surviving id on balls, partnerships and summaries.
+        //     Must run before Pulse / stats so every table gets the same id.
+        int mergedIdsReplaced = mergedUserRemapper.Apply(parsed);
+        if (mergedIdsReplaced > 0)
+        {
+            var duplicatePlayerIds = mergedUserRemapper.DuplicatePlayerIds(parsed);
+            if (duplicatePlayerIds.Count > 0)
+                Console.WriteLine($"[MERGE-DUP] {fixtureId} — both accounts of player(s) {string.Join(",", duplicatePlayerIds)} played in this fixture");
+        }
+        // End of Mani
 
         // 1b. LMS Pulse — fill pulse_after_pct / pulse_change_pct on every ball
         //     by replaying the balls in order (24 Sep 2026). Feeds the app's
@@ -459,6 +491,37 @@ async Task ProcessFixtureAsync(uint fixtureId, string fixtureJson)
         Console.WriteLine($"[FAIL] {fixtureId} — {ex.Message}");
     }
 }
+
+// By Mani 15 Oct 2026
+// ── Reprocess mode ──────────────────────────────────────────────
+if (reprocessMode)
+{
+    for (int argumentIndex = 1; argumentIndex < args.Length; argumentIndex++)
+    {
+        if (!uint.TryParse(args[argumentIndex], out uint reprocessFixtureId))
+        {
+            Console.WriteLine($"[SKIP] '{args[argumentIndex]}' is not a fixture id");
+            continue;
+        }
+
+        var reprocessJson = await fixtureReader.GetFixtureStateAsync(reprocessFixtureId);
+        if (string.IsNullOrEmpty(reprocessJson))
+        {
+            Console.WriteLine($"[SKIP] {reprocessFixtureId} — no FixtureState row");
+            continue;
+        }
+
+        Console.WriteLine($"Deleting fixture {reprocessFixtureId} from ClickHouse...");
+        await writer.DeleteFixtureAsync(reprocessFixtureId);
+        await ProcessFixtureAsync(reprocessFixtureId, reprocessJson);
+    }
+
+    await FlushAsync();
+    Console.WriteLine($"\nReprocess complete: {total} fixtures written, {failed} failed.");
+    Console.WriteLine("Reminder: run rebuild_mvs.sql so h2h_stats and the phase tables match ball_events.");
+    return;
+}
+// End of Mani
 
 // ── Catch-up mode ───────────────────────────────────────────────
 if (catchupMode)

@@ -119,6 +119,25 @@ namespace LMS.Migration.Worker
             }
         }
 
+        // By Mani 15 Oct 2026
+        /// <summary>
+        /// Removes one fixture from ball_events, partnerships and player_match_stats so it can be
+        /// written again (reprocess mode). Lightweight DELETE, same as DeleteFixturesAfterAsync.
+        /// The materialized-view targets (h2h_stats etc.) are NOT touched - run rebuild_mvs.sql after.
+        /// </summary>
+        public async Task DeleteFixtureAsync(uint fixtureId)
+        {
+            using var conn = new ClickHouseConnection(_connectionString);
+            await conn.OpenAsync();
+            foreach (var table in new[] { $"{_database}.ball_events", $"{_database}.partnerships", $"{_database}.player_match_stats" })
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"DELETE FROM {table} WHERE fixture_id = {fixtureId}";
+                await cmd.ExecuteNonQueryAsync();
+            }
+        }
+        // End of Mani
+
         private static readonly string[] BallEventColumns =
         {
             "fixture_id", "innings_number", "over_number", "ball_sequence", "ball_timestamp",
