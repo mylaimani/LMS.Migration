@@ -61,7 +61,7 @@ if (args.Length > 0 && args[0].Equals("export-opposition", StringComparison.Ordi
 // old id -> surviving id; every player id below goes through mergedUserRemapper.Resolve.
 var mergedUserMapReader = new MergedUserMapReader(sqlConn);
 var mergedUserRemapper = new MergedUserRemapper(await mergedUserMapReader.LoadAsync());
-Console.WriteLine($"Loaded {mergedUserRemapper.MapSize} merged player ids from Rep_MergedUserMap.");
+Console.WriteLine($"Loaded {mergedUserRemapper.MapSize} merged player ids.");
 // End of Mani
 
 // ── Clips-only mode:  .\LMS.Migration.Worker.exe clips ─────────
