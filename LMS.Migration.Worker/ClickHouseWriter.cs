@@ -14,15 +14,17 @@ namespace LMS.Migration.Worker
     {
         private readonly string _connectionString;
         private readonly string _database;
+        private readonly string _tableSuffix;   // By Mani 15 Oct 2026: "_reload" writes ball_events_reload etc. (reload mode), "" normally
 
         /// <param name="databaseName">
         /// ClickHouse database that holds the LMS tables. LMSClickHouseDB is the only database on
         /// both local and live servers (the old "lms" name is gone), so that is the default.
         /// </param>
-        public ClickHouseWriter(string connectionString, string databaseName = "LMSClickHouseDB")
+        public ClickHouseWriter(string connectionString, string databaseName = "LMSClickHouseDB", string tableSuffix = "")
         {
             _connectionString = connectionString;
             _database = databaseName;
+            _tableSuffix = tableSuffix;   // By Mani 15 Oct 2026
         }
 
         /// <summary>All fixture ids already in ball_events (for catch-up reconciliation).</summary>
@@ -32,7 +34,7 @@ namespace LMS.Migration.Worker
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"SELECT DISTINCT fixture_id FROM {_database}.ball_events";
+            cmd.CommandText = $"SELECT DISTINCT fixture_id FROM {_database}.ball_events{_tableSuffix}";
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
                 ids.Add(Convert.ToUInt32(reader.GetValue(0)));
@@ -55,7 +57,7 @@ namespace LMS.Migration.Worker
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"SELECT max(fixture_id) FROM {_database}.partnerships";
+            cmd.CommandText = $"SELECT max(fixture_id) FROM {_database}.partnerships{_tableSuffix}";
             var result = await cmd.ExecuteScalarAsync();
             return result == null || result == DBNull.Value ? 0u : Convert.ToUInt32(result);
         }
@@ -67,7 +69,7 @@ namespace LMS.Migration.Worker
 
             uint Min(uint a, uint b) => a < b ? a : b;
             uint safe = uint.MaxValue;
-            foreach (var table in new[] { $"{_database}.ball_events", $"{_database}.partnerships" })
+            foreach (var table in new[] { $"{_database}.ball_events{_tableSuffix}", $"{_database}.partnerships{_tableSuffix}" })
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"SELECT max(fixture_id) FROM {table}";
@@ -86,7 +88,7 @@ namespace LMS.Migration.Worker
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"TRUNCATE TABLE {_database}.player_match_stats";
+            cmd.CommandText = $"TRUNCATE TABLE {_database}.player_match_stats{_tableSuffix}";
             await cmd.ExecuteNonQueryAsync();
         }
 
@@ -99,7 +101,7 @@ namespace LMS.Migration.Worker
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"TRUNCATE TABLE {_database}.partnerships";
+            cmd.CommandText = $"TRUNCATE TABLE {_database}.partnerships{_tableSuffix}";
             await cmd.ExecuteNonQueryAsync();
         }
 
@@ -111,7 +113,7 @@ namespace LMS.Migration.Worker
         {
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
-            foreach (var table in new[] { $"{_database}.ball_events", $"{_database}.partnerships", $"{_database}.player_match_stats" })
+            foreach (var table in new[] { $"{_database}.ball_events{_tableSuffix}", $"{_database}.partnerships{_tableSuffix}", $"{_database}.player_match_stats{_tableSuffix}" })
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"DELETE FROM {table} WHERE fixture_id > {safeFixtureId}";
@@ -129,7 +131,7 @@ namespace LMS.Migration.Worker
         {
             using var conn = new ClickHouseConnection(_connectionString);
             await conn.OpenAsync();
-            foreach (var table in new[] { $"{_database}.ball_events", $"{_database}.partnerships", $"{_database}.player_match_stats" })
+            foreach (var table in new[] { $"{_database}.ball_events{_tableSuffix}", $"{_database}.partnerships{_tableSuffix}", $"{_database}.player_match_stats{_tableSuffix}" })
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"DELETE FROM {table} WHERE fixture_id = {fixtureId}";
@@ -160,7 +162,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = $"{_database}.ball_events",
+                DestinationTableName = $"{_database}.ball_events{_tableSuffix}",
                 ColumnNames = BallEventColumns,
                 BatchSize = 10000
             };
@@ -205,7 +207,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = $"{_database}.partnerships",
+                DestinationTableName = $"{_database}.partnerships{_tableSuffix}",
                 ColumnNames = PartnershipColumns,
                 BatchSize = 5000
             };
@@ -254,7 +256,7 @@ namespace LMS.Migration.Worker
 
             var bulkCopy = new ClickHouseBulkCopy(conn)
             {
-                DestinationTableName = $"{_database}.player_match_stats",
+                DestinationTableName = $"{_database}.player_match_stats{_tableSuffix}",
                 ColumnNames = PlayerMatchStatsColumns,
                 BatchSize = 5000
             };

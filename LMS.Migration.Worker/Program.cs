@@ -21,7 +21,19 @@ var fixtureReader = new SqlServerReader(sqlConn);
 var metaReader = new FixtureMetadataReader(sqlConn);
 var parser = new FixtureStateParser();
 var extractor = new PlayerStatsExtractor();
-var writer = new ClickHouseWriter(chConn, chDatabase);
+// By Mani 15 Oct 2026
+// ── Reload mode:  .\LMS.Migration.Worker.exe reload ──
+// Full migration again (merged player ids applied) but written to ball_events_reload, partnerships_reload
+// and player_match_stats_reload so the app keeps reading the live tables meanwhile. Create the _reload
+// tables first with migrations/reload_tables_create.sql, and swap them in afterwards with
+// migrations/reload_tables_swap.sql. Resume after a crash works the same as the normal full run.
+bool reloadMode = args.Length > 0 && args[0].Equals("reload", StringComparison.OrdinalIgnoreCase);
+// Optional:  reload 500  stops after 500 fixtures (local testing only; 0 = no limit)
+int reloadFixtureLimit = reloadMode && args.Length > 1 && int.TryParse(args[1], out int parsedLimit) ? parsedLimit : 0;
+var writer = new ClickHouseWriter(chConn, chDatabase, reloadMode ? "_reload" : "");
+if (reloadMode)
+    Console.WriteLine("RELOAD MODE: writing to ball_events_reload / partnerships_reload / player_match_stats_reload.");
+// End of Mani
 
 // By Mani
 // ── Opposition strength test mode:  .\LMS.Migration.Worker.exe opposition 515388 486870 ──
@@ -557,6 +569,7 @@ Console.WriteLine("Starting LMS migration...");
 await foreach (var (fixtureId, fixtureJson) in fixtureReader.ReadAllFixturesAsync(startAfter))
 {
     await ProcessFixtureAsync(fixtureId, fixtureJson);
+    if (reloadFixtureLimit > 0 && total + failed >= reloadFixtureLimit) break;   // By Mani 15 Oct 2026: test limit
 }
 
 await FlushAsync();   // write any remaining buffered fixtures
