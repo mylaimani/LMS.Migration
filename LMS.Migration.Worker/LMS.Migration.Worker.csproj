@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LMS.Migration.Core\LMS.Migration.Core.csproj" />
+    <ProjectReference Include="..\LMS.Migration.Pipeline\LMS.Migration.Pipeline.csproj" />
   </ItemGroup>
 
 </Project>

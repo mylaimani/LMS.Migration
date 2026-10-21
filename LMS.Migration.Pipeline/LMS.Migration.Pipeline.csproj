@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    By Mani 21 Oct 2026
+    Per-fixture pipeline shared by the console worker (LMS.Migration.Worker) and the
+    LMST20 Ball Worker (LMST20.WorkerService, net8.0). The SQL Server readers and the
+    ClickHouse writer moved here from LMS.Migration.Worker unchanged; the namespace
+    LMS.Migration.Worker is kept so Program.cs and the mode files did not need edits.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClickHouse.Client" Version="7.14.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LMS.Migration.Core\LMS.Migration.Core.csproj" />
+  </ItemGroup>
+
+</Project>
